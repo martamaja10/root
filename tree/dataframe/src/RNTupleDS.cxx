@@ -141,11 +141,13 @@ public:
 
    void *GetImpl(std::size_t /*idx*/) final { return fValue.GetRawPtr(); }
 
-   void LoadImpl(Long64_t entry, bool mask) final
+   void LoadImpl(const ROOT::Internal::RDF::RMaskedEntryRange &mask) final
    {
-      if (entry != fLastEntry && mask) {
-         fValue.Read(entry);
-         fLastEntry = entry;
+      // TODO remove assumption that bulk has size 1
+      const auto firstEntry = mask.FirstEntry();
+      if (firstEntry != fLastEntry && mask[0]) {
+         fValue.Read(firstEntry);
+         fLastEntry = firstEntry;
       }
    }
 };
