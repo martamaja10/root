@@ -465,7 +465,7 @@ void RLoopManager::RunEmptySourceMT()
       try {
          UpdateSampleInfo(slot, range);
          for (auto currEntry = range.first; currEntry < range.second; ++currEntry) {
-            RunAndCheckFilters(slot, currEntry);
+            RunAndCheckFilters(slot, currEntry, /*bulkSize*/1u);
          }
       } catch (...) {
          // Error might throw in experiment frameworks like CMSSW
@@ -491,7 +491,7 @@ void RLoopManager::RunEmptySource()
       UpdateSampleInfo(/*slot*/ 0, fEmptyEntryRange);
       for (ULong64_t currEntry = fEmptyEntryRange.first;
            currEntry < fEmptyEntryRange.second && fNStopsReceived < fNChildren; ++currEntry) {
-         RunAndCheckFilters(0, currEntry);
+         RunAndCheckFilters(/*slot*/0, currEntry, /*bulkSize*/1u);
       }
    } catch (...) {
       std::cerr << "RDataFrame::Run: event loop was interrupted\n";
@@ -528,7 +528,7 @@ void RLoopManager::RunTreeProcessorMT()
             if (fNewSampleNotifier.CheckFlag(slot)) {
                UpdateSampleInfo(slot, r);
             }
-            RunAndCheckFilters(slot, count++);
+            RunAndCheckFilters(slot, count++, /*bulkSize*/1u);
          }
       } catch (...) {
          std::cerr << "RDataFrame::Run: event loop was interrupted\n";
@@ -569,7 +569,7 @@ void RLoopManager::RunTreeReader()
          if (fNewSampleNotifier.CheckFlag(0)) {
             UpdateSampleInfo(/*slot*/0, r);
          }
-         RunAndCheckFilters(0, r.GetCurrentEntry());
+         RunAndCheckFilters(0, r.GetCurrentEntry(), /*bulkSize*/ 1u);
       }
    } catch (...) {
       std::cerr << "RDataFrame::Run: event loop was interrupted\n";
@@ -599,7 +599,7 @@ void RLoopManager::RunDataSource()
             R__LOG_DEBUG(0, RDFLogChannel()) << LogRangeProcessing({fDataSource->GetLabel(), start, end, 0u});
             for (auto entry = start; entry < end && fNStopsReceived < fNChildren; ++entry) {
                if (fDataSource->SetEntry(0u, entry)) {
-                  RunAndCheckFilters(0u, entry);
+                  RunAndCheckFilters(0u, entry, /*bulkSize*/1u);
                }
             }
          }
@@ -634,7 +634,7 @@ void RLoopManager::RunDataSourceMT()
       try {
          for (auto entry = start; entry < end; ++entry) {
             if (fDataSource->SetEntry(slot, entry)) {
-               RunAndCheckFilters(slot, entry);
+               RunAndCheckFilters(slot, entry, /*bulkSize*/1u);
             }
          }
       } catch (...) {
@@ -656,7 +656,7 @@ void RLoopManager::RunDataSourceMT()
 
 /// Execute actions and make sure named filters are called for each event.
 /// Named filters must be called even if the analysis logic would not require it, lest they report confusing results.
-void RLoopManager::RunAndCheckFilters(unsigned int slot, Long64_t entry)
+void RLoopManager::RunAndCheckFilters(unsigned int slot, Long64_t entry, std::size_t bulkSize)
 {
    // data-block callbacks run before the rest of the graph
    if (fNewSampleNotifier.CheckFlag(slot)) {
@@ -666,9 +666,9 @@ void RLoopManager::RunAndCheckFilters(unsigned int slot, Long64_t entry)
    }
 
    for (auto *actionPtr : fBookedActions)
-      actionPtr->Run(slot, entry);
+      actionPtr->Run(slot, entry, bulkSize);
    for (auto *namedFilterPtr : fBookedNamedFilters)
-      namedFilterPtr->CheckFilters(slot, entry);
+      namedFilterPtr->CheckFilters(slot, entry, bulkSize);
    for (auto &callback : fCallbacksEveryNEvents)
       callback(slot);
 }
@@ -943,7 +943,8 @@ void RLoopManager::Deregister(RDFInternal::RVariationBase *v)
 }
 
 // End of recursive chain of calls
-const RDFInternal::RMaskedEntryRange &RLoopManager::CheckFilters(unsigned int slot, Long64_t entry)
+const RDFInternal::RMaskedEntryRange &
+RLoopManager::CheckFilters(unsigned int slot, Long64_t entry, std::size_t /*bulkSize*/)
 {
    auto &m = fAllTrueMasks[slot];
    m.SetFirstEntry(entry);
