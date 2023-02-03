@@ -1518,7 +1518,6 @@ class R__CLING_PTRCHECK(off) SnapshotHelper : public RActionImpl<SnapshotHelper<
    RSnapshotOptions fOptions;
    std::unique_ptr<TFile> fOutputFile;
    std::unique_ptr<TTree> fOutputTree; // must be a ptr because TTrees are not copy/move constructible
-   bool fBranchAddressesNeedReset{true};
    ColumnNames_t fInputBranchNames; // This contains the resolved aliases
    ColumnNames_t fOutputBranchNames;
    TTree *fInputTree = nullptr; // Current input tree. Set at initialization time (`InitTask`)
@@ -1552,18 +1551,13 @@ public:
    {
       if (r)
          fInputTree = r->GetTree();
-      fBranchAddressesNeedReset = true;
    }
 
    void Exec(unsigned int /* slot */, ColTypes &... values)
    {
       using ind_t = std::index_sequence_for<ColTypes...>;
-      if (!fBranchAddressesNeedReset) {
-         UpdateCArraysPtrs(values..., ind_t{});
-      } else {
-         SetBranches(values..., ind_t{});
-         fBranchAddressesNeedReset = false;
-      }
+      SetBranches(values..., ind_t{});
+      UpdateCArraysPtrs(values..., ind_t{});
       fOutputTree->Fill();
    }
 
@@ -1634,11 +1628,6 @@ public:
 
    std::string GetActionName() { return "Snapshot"; }
 
-   ROOT::RDF::SampleCallback_t GetSampleCallback() final
-   {
-      return [this](unsigned int, const RSampleInfo &) mutable { fBranchAddressesNeedReset = true; };
-   }
-
    /**
     * @brief Create a new SnapshotHelper with a different output file name
     *
@@ -1665,7 +1654,6 @@ class R__CLING_PTRCHECK(off) SnapshotHelperMT : public RActionImpl<SnapshotHelpe
    std::unique_ptr<ROOT::TBufferMerger> fMerger; // must use a ptr because TBufferMerger is not movable
    std::vector<std::shared_ptr<ROOT::TBufferMergerFile>> fOutputFiles;
    std::vector<std::unique_ptr<TTree>> fOutputTrees;
-   std::vector<int> fBranchAddressesNeedReset; // vector<bool> does not allow concurrent writing of different elements
    std::string fFileName;           // name of the output file name
    std::string fDirName;            // name of TFile subdirectory in which output must be written (possibly empty)
    std::string fTreeName;           // name of output tree
@@ -1685,7 +1673,7 @@ public:
    SnapshotHelperMT(const unsigned int nSlots, std::string_view filename, std::string_view dirname,
                     std::string_view treename, const ColumnNames_t &vbnames, const ColumnNames_t &bnames,
                     const RSnapshotOptions &options, std::vector<bool> &&isDefine)
-      : fNSlots(nSlots), fOutputFiles(fNSlots), fOutputTrees(fNSlots), fBranchAddressesNeedReset(fNSlots, 1),
+      : fNSlots(nSlots), fOutputFiles(fNSlots), fOutputTrees(fNSlots),
         fFileName(filename), fDirName(dirname), fTreeName(treename), fOptions(options), fInputBranchNames(vbnames),
         fOutputBranchNames(ReplaceDotWithUnderscore(bnames)), fInputTrees(fNSlots),
         fBranches(fNSlots, std::vector<TBranch *>(vbnames.size(), nullptr)),
@@ -1728,7 +1716,6 @@ public:
          // not an empty-source RDF
          fInputTrees[slot] = r->GetTree();
       }
-      fBranchAddressesNeedReset[slot] = 1; // reset first event flag for this slot
    }
 
    void FinalizeTask(unsigned int slot)
@@ -1743,12 +1730,8 @@ public:
    void Exec(unsigned int slot, ColTypes &... values)
    {
       using ind_t = std::index_sequence_for<ColTypes...>;
-      if (fBranchAddressesNeedReset[slot] == 0) {
-         UpdateCArraysPtrs(slot, values..., ind_t{});
-      } else {
-         SetBranches(slot, values..., ind_t{});
-         fBranchAddressesNeedReset[slot] = 0;
-      }
+      UpdateCArraysPtrs(slot, values..., ind_t{});
+      SetBranches(slot, values..., ind_t{});
       fOutputTrees[slot]->Fill();
       auto entries = fOutputTrees[slot]->GetEntries();
       auto autoFlush = fOutputTrees[slot]->GetAutoFlush();
@@ -1818,11 +1801,6 @@ public:
    }
 
    std::string GetActionName() { return "Snapshot"; }
-
-   ROOT::RDF::SampleCallback_t GetSampleCallback() final
-   {
-      return [this](unsigned int slot, const RSampleInfo &) mutable { fBranchAddressesNeedReset[slot] = 1; };
-   }
 
    /**
     * @brief Create a new SnapshotHelperMT with a different output file name
