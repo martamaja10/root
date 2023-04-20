@@ -73,6 +73,7 @@ ROOT_STANDARD_LIBRARY_PACKAGE(ROOTDataFrame
     ROOT/RDF/RCutFlowReport.hxx
     ROOT/RDF/RDatasetSpec.hxx
     ROOT/RDF/RDisplay.hxx
+    ROOT/RDF/REventMask.hxx
     ROOT/RDF/RFilterBase.hxx
     ROOT/RDF/RFilter.hxx
     ROOT/RDF/RInterface.hxx
