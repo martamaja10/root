@@ -54,6 +54,7 @@ ROOT_ADD_GTEST(dataframe_entrylist dataframe_entrylist.cxx LIBRARIES ROOTDataFra
 ROOT_ADD_GTEST(dataframe_merge_results dataframe_merge_results.cxx LIBRARIES ROOTDataFrame)
 ROOT_ADD_GTEST(dataframe_samplecallback dataframe_samplecallback.cxx CounterHelper.h LIBRARIES ROOTDataFrame)
 ROOT_ADD_GTEST(dataframe_vary dataframe_vary.cxx LIBRARIES ROOTDataFrame)
+ROOT_ADD_GTEST(dataframe_bulk_api dataframe_bulk_api.cxx LIBRARIES ROOTDataFrame)
 
 #### TESTS FOR DIFFERENT DATASOURCES ####
 if(MSVC AND MSVC_VERSION GREATER_EQUAL 1925 AND MSVC_VERSION LESS 1929 OR CMAKE_CXX_STANDARD LESS 17)
