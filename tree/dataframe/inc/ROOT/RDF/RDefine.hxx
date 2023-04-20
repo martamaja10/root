@@ -17,6 +17,7 @@
 #include "ROOT/RDF/RLoopManager.hxx"
 #include "ROOT/RDF/Utils.hxx"
 #include <string_view>
+#include "ROOT/RDF/REventMask.hxx"
 #include "ROOT/TypeTraits.hxx"
 #include "RtypesCore.h"
 
@@ -42,6 +43,55 @@ struct SlotAndEntry{};
 }
 // clang-format on
 
+template <typename T>
+struct ReturnTypeForBulkExpr {
+   using type = void;
+};
+
+template <typename U, typename... Ts>
+struct ReturnTypeForBulkExpr<TypeList<ROOT::RDF::Experimental::REventMask, ROOT::RVec<U>, Ts...>> {
+   // take the inner type of the second argument to the expression (the result array)
+   using type = U;
+};
+
+template <typename T>
+using ReturnTypeForBulkExpr_t = typename ReturnTypeForBulkExpr<T>::type;
+
+template <bool IsUsingBulkAPI, typename ExtraArgsTag, typename FunArgTypes>
+struct ExtractColumnTypes {
+   using type = FunArgTypes; // default case, should be IsUsingBulkAPI == false and ExtraArgsTag == None
+};
+
+template <typename FunArgTypes>
+struct ExtractColumnTypes</*IsUsingBulkAPI*/false, ExtraArgsForDefine::Slot, FunArgTypes> {
+   using type = RemoveFirstParameter_t<FunArgTypes>;
+};
+
+template <typename FunArgTypes>
+struct ExtractColumnTypes</*IsUsingBulkAPI*/false, ExtraArgsForDefine::SlotAndEntry, FunArgTypes> {
+   using type = RemoveFirstParameter_t<RemoveFirstParameter_t<FunArgTypes>>;
+};
+
+template <typename ExtraArgsTag, typename FunArgTypes>
+struct ExtractColumnTypes</*IsUsingBulkAPI*/true, ExtraArgsTag, FunArgTypes> {
+
+   template <typename T>
+   struct ValueTypes {};
+
+   template <typename... Inners>
+   struct ValueTypes<TypeList<ROOT::RVec<Inners>...>> {
+      using type = TypeList<Inners...>;
+   };
+
+   template <typename TypeList>
+   using ValueTypes_t = typename ValueTypes<TypeList>::type;
+
+   using type = ValueTypes_t<RemoveFirstParameter_t<RemoveFirstParameter_t<FunArgTypes>>>;
+};
+
+template <bool IsUsingBulkAPI, typename ExtraArgsTag, typename FunArgTypes>
+using ExtractColumnTypes_t = typename ExtractColumnTypes<IsUsingBulkAPI, ExtraArgsTag, FunArgTypes>::type;
+
 template <typename F, typename ExtraArgsTag = ExtraArgsForDefine::None>
 class R__CLING_PTRCHECK(off) RDefine final : public RDefineBase {
    // shortcuts
@@ -50,14 +100,19 @@ class R__CLING_PTRCHECK(off) RDefine final : public RDefineBase {
    using SlotAndEntryTag = ExtraArgsForDefine::SlotAndEntry;
    // other types
    using FunParamTypes_t = typename CallableTraits<F>::arg_types;
-   using ColumnTypesTmp_t =
-      RDFInternal::RemoveFirstParameterIf_t<std::is_same<ExtraArgsTag, SlotTag>::value, FunParamTypes_t>;
-   using ColumnTypes_t =
-      RDFInternal::RemoveFirstTwoParametersIf_t<std::is_same<ExtraArgsTag, SlotAndEntryTag>::value, ColumnTypesTmp_t>;
+   constexpr static auto kUsingBulkAPI =
+      std::is_same<TakeFirstParameter_t<FunParamTypes_t>, ROOT::RDF::Experimental::REventMask>::value;
+
+public:
+   using ColumnTypes_t = ExtractColumnTypes_t<kUsingBulkAPI, ExtraArgsTag, FunParamTypes_t>;
    using TypeInd_t = std::make_index_sequence<ColumnTypes_t::list_size>;
-   using ret_type = typename CallableTraits<F>::ret_type;
+   using RetType_t = std::conditional_t<kUsingBulkAPI, RDFInternal::ReturnTypeForBulkExpr_t<FunParamTypes_t>,
+                                        // ret_type is simply the return type of the expression
+                                        typename CallableTraits<F>::ret_type>;
+
+private:
    // Avoid instantiating vector<bool> as `operator[]` returns temporaries in that case. Use std::deque instead.
-   using ValuesPerSlot_t = std::vector<ROOT::RVec<ret_type>>;
+   using ValuesPerSlot_t = std::vector<ROOT::RVec<RetType_t>>;
 
    F fExpression;
    ValuesPerSlot_t fLastResults;
@@ -101,12 +156,50 @@ class R__CLING_PTRCHECK(off) RDefine final : public RDefineBase {
       (void)idx; // avoid unused variable warnings (gcc 12)
    }
 
+   // non-bulk overload, calls EvalExpr in a loop
+   template <typename FirstInputCol>
+   void UpdateHelper(FirstInputCol *, unsigned int slot, const Internal::RDF::RMaskedEntryRange &requestedMask,
+                     std::size_t bulkSize)
+   {
+      auto &results = fLastResults[slot * RDFInternal::CacheLineStep<RetType_t>()];
+      auto &valueMask = fMask[slot * RDFInternal::CacheLineStep<RDFInternal::RMaskedEntryRange>()];
+      const auto rdfentry_start = fLoopManager->GetUniqueRDFEntry(slot);
+      for (std::size_t i = 0ul; i < bulkSize; ++i) {
+         if (requestedMask[i] && !valueMask[i]) { // we don't have a value for this entry yet
+            results[i] = EvalExpr(slot, i, rdfentry_start + i, ColumnTypes_t{}, TypeInd_t{}, ExtraArgsTag{});
+            valueMask[i] = true;
+         }
+      }
+   }
+
+   template <typename... ColTypes, std::size_t... S>
+   auto EvalBulkExpr(const ROOT::RDF::Experimental::REventMask &m, unsigned int slot, TypeList<ColTypes...>,
+                     std::index_sequence<S...>)
+   {
+      auto &results = fLastResults[slot * RDFInternal::CacheLineStep<RetType_t>()];
+      const auto bulkSize = m.Size();
+      fExpression(m, results, ROOT::RVec<ColTypes>(static_cast<ColTypes *>(fValuePtrs[slot][S]), bulkSize)...);
+      (void)bulkSize; // avoid unused variable warnings when the variadic parameter pack is empty
+   }
+
+   // bulk overload (first input column is a REventMask)
+   void UpdateHelper(ROOT::RDF::Experimental::REventMask *, unsigned int slot,
+                     const Internal::RDF::RMaskedEntryRange &requestedMask, std::size_t bulkSize)
+   {
+      const auto eventMask = ROOT::RDF::Experimental::REventMask(requestedMask, bulkSize);
+      EvalBulkExpr(eventMask, slot, ColumnTypes_t{}, TypeInd_t{});
+      auto &valueMask = fMask[slot * RDFInternal::CacheLineStep<RDFInternal::RMaskedEntryRange>()];
+      valueMask = requestedMask;
+   }
+
 public:
    RDefine(std::string_view name, std::string_view type, F expression, const ROOT::RDF::ColumnNames_t &columns,
            const RDFInternal::RColumnRegister &colRegister, RLoopManager &lm,
            const std::string &variationName = "nominal")
-      : RDefineBase(name, type, colRegister, lm, columns, variationName), fExpression(std::move(expression)),
-        fLastResults(lm.GetNSlots() * RDFInternal::CacheLineStep<ret_type>()), fValueReaders(lm.GetNSlots()),
+      : RDefineBase(name, type, colRegister, lm, columns, variationName),
+        fExpression(std::move(expression)),
+        fLastResults(lm.GetNSlots() * RDFInternal::CacheLineStep<RetType_t>()),
+        fValueReaders(lm.GetNSlots()),
         fValuePtrs(lm.GetNSlots())
    {
       for (auto &r : fLastResults)
@@ -128,7 +221,7 @@ public:
    /// Return the (type-erased) address of the Define'd value for the given processing slot.
    void *GetValuePtr(unsigned int slot) final
    {
-      return static_cast<void *>(fLastResults[slot * RDFInternal::CacheLineStep<ret_type>()].data());
+      return static_cast<void *>(fLastResults[slot * RDFInternal::CacheLineStep<RetType_t>()].data());
    }
 
    /// Update the value at the address returned by GetValuePtr with the content corresponding to the given entry
@@ -144,19 +237,14 @@ public:
       std::transform(fValueReaders[slot].begin(), fValueReaders[slot].end(), fValuePtrs[slot].begin(),
                      [&requestedMask, &bulkSize](auto *v) { return v->Load(requestedMask, bulkSize); });
 
-      auto &results = fLastResults[slot * RDFInternal::CacheLineStep<ret_type>()];
-      const auto rdfentry_start = fLoopManager->GetUniqueRDFEntry(slot);
-      for (std::size_t i = 0ul; i < bulkSize; ++i) {
-         if (requestedMask[i] && !valueMask[i]) { // we don't have a value for this entry yet
-            results[i] = EvalExpr(slot, i, rdfentry_start + i, ColumnTypes_t{}, TypeInd_t{}, ExtraArgsTag{});
-            valueMask[i] = true;
-         }
-      }
+      // dispatch either to the bulk version or to the event-by-event version based on the type of the first input col
+      using FirstArg_t = TakeFirstParameter_t<FunParamTypes_t>;
+      UpdateHelper((FirstArg_t *)nullptr, slot, requestedMask, bulkSize);
    }
 
    void Update(unsigned int /*slot*/, const ROOT::RDF::RSampleInfo & /*id*/) final {}
 
-   const std::type_info &GetTypeId() const final { return typeid(ret_type); }
+   const std::type_info &GetTypeId() const final { return typeid(RetType_t); }
 
    /// Clean-up operations to be performed at the end of a task.
    void FinalizeSlot(unsigned int slot) final
@@ -201,13 +289,13 @@ public:
       return *(it->second);
    }
 
-   std::size_t GetTypeSize() const final { return sizeof(ret_type); }
+   std::size_t GetTypeSize() const final { return sizeof(RetType_t); }
 
    bool IsDefinePerSample() const final { return false; }
 };
 
-} // ns RDF
-} // ns Detail
-} // ns ROOT
+} // namespace RDF
+} // namespace Detail
+} // namespace ROOT
 
 #endif // ROOT_RDF_RDEFINE

@@ -2770,8 +2770,12 @@ public:
    }
 
 private:
-   template <typename F, typename DefineType, typename RetType = typename TTraits::CallableTraits<F>::ret_type>
-   std::enable_if_t<std::is_default_constructible<RetType>::value, RInterface<Proxied, DS_t>>
+   template <typename F, typename DefineType, typename ArgTypes = typename TTraits::CallableTraits<F>::arg_types,
+             typename RetType = typename TTraits::CallableTraits<F>::ret_type,
+             bool IsRetTypeDefConstr = std::is_default_constructible<RetType>::value,
+             bool IsUsingBulkAPI =
+                std::is_same<TTraits::TakeFirstParameter_t<ArgTypes>, ROOT::RDF::Experimental::REventMask>::value>
+   std::enable_if_t<IsRetTypeDefConstr || IsUsingBulkAPI, RInterface<Proxied, DS_t>>
    DefineImpl(std::string_view name, F &&expression, const ColumnNames_t &columns, const std::string &where)
    {
       if (where.compare(0, 8, "Redefine") != 0) { // not a Redefine
@@ -2784,29 +2788,25 @@ private:
          RDFInternal::CheckForNoVariations(where, name, fColRegister);
       }
 
-      using ArgTypes_t = typename TTraits::CallableTraits<F>::arg_types;
-      using ColTypesTmp_t = typename RDFInternal::RemoveFirstParameterIf<
-         std::is_same<DefineType, RDFDetail::ExtraArgsForDefine::Slot>::value, ArgTypes_t>::type;
-      using ColTypes_t = typename RDFInternal::RemoveFirstTwoParametersIf<
-         std::is_same<DefineType, RDFDetail::ExtraArgsForDefine::SlotAndEntry>::value, ColTypesTmp_t>::type;
-
+      using RDefine_t = RDFDetail::RDefine<F, DefineType>;
+      using DefinedColType_t = typename RDefine_t::RetType_t; // it is different from RetType in case of bulk API
+      using ColTypes_t = typename RDefine_t::ColumnTypes_t;
       constexpr auto nColumns = ColTypes_t::list_size;
 
       const auto validColumnNames = GetValidatedColumnNames(nColumns, columns);
       CheckAndFillDSColumns(validColumnNames, ColTypes_t());
 
       // Declare return type to the interpreter, for future use by jitted actions
-      auto retTypeName = RDFInternal::TypeID2TypeName(typeid(RetType));
+      auto retTypeName = RDFInternal::TypeID2TypeName(typeid(DefinedColType_t));
       if (retTypeName.empty()) {
          // The type is not known to the interpreter.
          // We must not error out here, but if/when this column is used in jitted code
-         const auto demangledType = RDFInternal::DemangleTypeIdName(typeid(RetType));
+         const auto demangledType = RDFInternal::DemangleTypeIdName(typeid(DefinedColType_t));
          retTypeName = "CLING_UNKNOWN_TYPE_" + demangledType;
       }
 
-      using NewCol_t = RDFDetail::RDefine<F, DefineType>;
-      auto newColumn = std::make_shared<NewCol_t>(name, retTypeName, std::forward<F>(expression), validColumnNames,
-                                                  fColRegister, *fLoopManager);
+      auto newColumn = std::make_shared<RDefine_t>(name, retTypeName, std::forward<F>(expression), validColumnNames,
+                                                   fColRegister, *fLoopManager);
 
       RDFInternal::RColumnRegister newCols(fColRegister);
       newCols.AddDefine(std::move(newColumn));
@@ -2819,10 +2819,13 @@ private:
    // This overload is chosen when the callable passed to Define or DefineSlot returns void.
    // It simply fires a compile-time error. This is preferable to a static_assert in the main `Define` overload because
    // this way compilation of `Define` has no way to continue after throwing the error.
-   template <typename F, typename DefineType, typename RetType = typename TTraits::CallableTraits<F>::ret_type,
+   template <typename F, typename DefineType, typename ArgTypes = typename TTraits::CallableTraits<F>::arg_types,
+             typename RetType = typename TTraits::CallableTraits<F>::ret_type,
              bool IsFStringConv = std::is_convertible<F, std::string>::value,
-             bool IsRetTypeDefConstr = std::is_default_constructible<RetType>::value>
-   std::enable_if_t<!IsFStringConv && !IsRetTypeDefConstr, RInterface<Proxied, DS_t>>
+             bool IsRetTypeDefConstr = std::is_default_constructible<RetType>::value,
+             bool IsUsingBulkAPI =
+                std::is_same<TTraits::TakeFirstParameter_t<ArgTypes>, ROOT::RDF::Experimental::REventMask>::value>
+   std::enable_if_t<!IsFStringConv && !IsRetTypeDefConstr && !IsUsingBulkAPI, RInterface<Proxied, DS_t>>
    DefineImpl(std::string_view, F, const ColumnNames_t &, const std::string &)
    {
       static_assert(std::is_default_constructible<typename TTraits::CallableTraits<F>::ret_type>::value,
