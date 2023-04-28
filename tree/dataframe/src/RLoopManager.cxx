@@ -385,42 +385,56 @@ ColumnNames_t ROOT::Internal::RDF::GetBranchNames(TTree &t, bool allowDuplicates
    return bNames;
 }
 
-RLoopManager::RLoopManager(TTree *tree, const ColumnNames_t &defaultBranches)
-   : fTree(std::shared_ptr<TTree>(tree, [](TTree *) {})), fDefaultColumns(defaultBranches),
+RLoopManager::RLoopManager(TTree *tree, const ColumnNames_t &defaultBranches, std::size_t maxBulkSize)
+   : fTree(std::shared_ptr<TTree>(tree, [](TTree *) {})),
+     fDefaultColumns(defaultBranches),
      fNSlots(RDFInternal::GetNSlots()),
      fLoopType(ROOT::IsImplicitMTEnabled() ? ELoopType::kROOTFilesMT : ELoopType::kROOTFiles),
-     fNewSampleNotifier(fNSlots), fSampleInfos(fNSlots), fDatasetColumnReaders(fNSlots),
-     fAllTrueMasks(fNSlots, {fMaxEventsPerBulk}), fUniqueRDFEntry(fNSlots, -1ll)
+     fNewSampleNotifier(fNSlots),
+     fSampleInfos(fNSlots),
+     fDatasetColumnReaders(fNSlots),
+     fMaxEventsPerBulk(maxBulkSize),
+     fAllTrueMasks(fNSlots, {fMaxEventsPerBulk}),
+     fUniqueRDFEntry(fNSlots, -1ll)
 {
 }
 
-RLoopManager::RLoopManager(ULong64_t nEmptyEntries)
+RLoopManager::RLoopManager(ULong64_t nEmptyEntries, std::size_t maxBulkSize)
    : fEmptyEntryRange(0, nEmptyEntries),
      fNSlots(RDFInternal::GetNSlots()),
      fLoopType(ROOT::IsImplicitMTEnabled() ? ELoopType::kNoFilesMT : ELoopType::kNoFiles),
      fNewSampleNotifier(fNSlots),
      fSampleInfos(fNSlots),
      fDatasetColumnReaders(fNSlots),
+     fMaxEventsPerBulk(maxBulkSize),
      fAllTrueMasks(fNSlots, {fMaxEventsPerBulk}),
      fUniqueRDFEntry(fNSlots, -1ll)
 {
 }
 
-RLoopManager::RLoopManager(std::unique_ptr<RDataSource> ds, const ColumnNames_t &defaultBranches)
-   : fDefaultColumns(defaultBranches), fNSlots(RDFInternal::GetNSlots()),
+RLoopManager::RLoopManager(std::unique_ptr<RDataSource> ds, const ColumnNames_t &defaultBranches,
+                           std::size_t maxBulkSize)
+   : fDefaultColumns(defaultBranches),
+     fNSlots(RDFInternal::GetNSlots()),
      fLoopType(ROOT::IsImplicitMTEnabled() ? ELoopType::kDataSourceMT : ELoopType::kDataSource),
-     fDataSource(std::move(ds)), fNewSampleNotifier(fNSlots), fSampleInfos(fNSlots), fDatasetColumnReaders(fNSlots),
-     fAllTrueMasks(fNSlots, {fMaxEventsPerBulk}), fUniqueRDFEntry(fNSlots, -1ll)
+     fDataSource(std::move(ds)),
+     fNewSampleNotifier(fNSlots),
+     fSampleInfos(fNSlots),
+     fDatasetColumnReaders(fNSlots),
+     fMaxEventsPerBulk(maxBulkSize),
+     fAllTrueMasks(fNSlots, {fMaxEventsPerBulk}),
+     fUniqueRDFEntry(fNSlots, -1ll)
 {
    fDataSource->SetNSlots(fNSlots);
 }
 
-RLoopManager::RLoopManager(ROOT::RDF::Experimental::RDatasetSpec &&spec)
+RLoopManager::RLoopManager(ROOT::RDF::Experimental::RDatasetSpec &&spec, std::size_t maxBulkSize)
    : fNSlots(RDFInternal::GetNSlots()),
      fLoopType(ROOT::IsImplicitMTEnabled() ? ELoopType::kROOTFilesMT : ELoopType::kROOTFiles),
      fNewSampleNotifier(fNSlots),
      fSampleInfos(fNSlots),
      fDatasetColumnReaders(fNSlots),
+     fMaxEventsPerBulk(maxBulkSize),
      fAllTrueMasks(fNSlots, {fMaxEventsPerBulk}),
      fUniqueRDFEntry(fNSlots, -1ll)
 {

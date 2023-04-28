@@ -41,17 +41,20 @@ namespace RDFDetail = ROOT::Detail::RDF;
 class RDataFrame : public ROOT::RDF::RInterface<RDFDetail::RLoopManager> {
 public:
    using ColumnNames_t = ROOT::RDF::ColumnNames_t;
-   RDataFrame(std::string_view treeName, std::string_view filenameglob, const ColumnNames_t &defaultColumns = {});
+   RDataFrame(std::string_view treeName, std::string_view filenameglob, const ColumnNames_t &defaultColumns = {},
+              std::size_t maxBulkSize = 256u);
    RDataFrame(std::string_view treename, const std::vector<std::string> &filenames,
-              const ColumnNames_t &defaultColumns = {});
+              const ColumnNames_t &defaultColumns = {}, std::size_t maxBulkSize = 256u);
    RDataFrame(std::string_view treename, std::initializer_list<std::string> filenames,
-              const ColumnNames_t &defaultColumns = {}):
-              RDataFrame(treename, std::vector<std::string>(std::move(filenames)), defaultColumns) {}
-   RDataFrame(std::string_view treeName, ::TDirectory *dirPtr, const ColumnNames_t &defaultColumns = {});
-   RDataFrame(TTree &tree, const ColumnNames_t &defaultColumns = {});
-   RDataFrame(ULong64_t numEntries);
-   RDataFrame(std::unique_ptr<ROOT::RDF::RDataSource>, const ColumnNames_t &defaultColumns = {});
-   RDataFrame(ROOT::RDF::Experimental::RDatasetSpec spec);
+              const ColumnNames_t &defaultColumns = {}, std::size_t maxBulkSize = 256u)
+      : RDataFrame(treename, std::vector<std::string>(std::move(filenames)), defaultColumns, maxBulkSize) { }
+   RDataFrame(std::string_view treeName, ::TDirectory *dirPtr, const ColumnNames_t &defaultColumns = {},
+              std::size_t maxBulkSize = 256u);
+   RDataFrame(TTree &tree, const ColumnNames_t &defaultColumns = {}, std::size_t maxBulkSize = 256u);
+   RDataFrame(ULong64_t numEntries, std::size_t maxBulkSize = 256u);
+   RDataFrame(std::unique_ptr<ROOT::RDF::RDataSource>, const ColumnNames_t &defaultColumns = {},
+              std::size_t maxBulkSize = 256u);
+   RDataFrame(ROOT::RDF::Experimental::RDatasetSpec spec, std::size_t maxBulkSize = 256u);
 };
 
 namespace RDF {

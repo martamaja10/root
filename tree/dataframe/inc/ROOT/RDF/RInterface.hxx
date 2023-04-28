@@ -1149,7 +1149,8 @@ public:
       // If we proceed, the jitted call will not compile!
       if (columnList.empty()) {
          auto nEntries = *this->Count();
-         RInterface<RLoopManager> emptyRDF(std::make_shared<RLoopManager>(nEntries));
+         RInterface<RLoopManager> emptyRDF(
+            std::make_shared<RLoopManager>(nEntries, fLoopManager->GetMaxEventsPerBulk()));
          return emptyRDF;
       }
 
@@ -1159,7 +1160,7 @@ public:
                                                                                       fColRegister);
       // build a string equivalent to
       // "(RInterface<nodetype*>*)(this)->Cache<Ts...>(*(ColumnNames_t*)(&columnList))"
-      RInterface<RLoopManager> resRDF(std::make_shared<ROOT::Detail::RDF::RLoopManager>(0));
+      RInterface<RLoopManager> resRDF(std::make_shared<ROOT::Detail::RDF::RLoopManager>(0, 0));
       cacheCall << "*reinterpret_cast<ROOT::RDF::RInterface<ROOT::Detail::RDF::RLoopManager>*>("
                 << RDFInternal::PrettyPrintAddr(&resRDF)
                 << ") = reinterpret_cast<ROOT::RDF::RInterface<ROOT::Detail::RDF::RNodeBase>*>("
@@ -2884,7 +2885,8 @@ private:
       auto ds = std::make_unique<RLazyDS<ColTypes...>>(
          std::make_pair(columnListWithoutSizeColumns[S], std::get<S>(colHolders))...);
 
-      RInterface<RLoopManager> cachedRDF(std::make_shared<RLoopManager>(std::move(ds), columnListWithoutSizeColumns));
+      RInterface<RLoopManager> cachedRDF(std::make_shared<RLoopManager>(std::move(ds), columnListWithoutSizeColumns,
+                                                                        fLoopManager->GetMaxEventsPerBulk()));
 
       return cachedRDF;
    }

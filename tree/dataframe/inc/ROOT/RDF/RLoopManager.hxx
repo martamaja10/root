@@ -161,7 +161,7 @@ class RLoopManager : public RNodeBase {
    ROOT::Internal::TreeUtils::RNoCleanupNotifier fNoCleanupNotifier;
 
    /// All of the computation graph must be able to process these many events per bulk.
-   std::size_t fMaxEventsPerBulk = 1000u;
+   std::size_t fMaxEventsPerBulk;
    /// One masked entry range per processing slot. All elements are always true, while the range changes.
    std::vector<RDFInternal::RMaskedEntryRange> fAllTrueMasks;
 
@@ -185,10 +185,10 @@ class RLoopManager : public RNodeBase {
    void UpdateSampleInfo(unsigned int slot, TTreeReader &r);
 
 public:
-   RLoopManager(TTree *tree, const ColumnNames_t &defaultBranches);
-   RLoopManager(ULong64_t nEmptyEntries);
-   RLoopManager(std::unique_ptr<RDataSource> ds, const ColumnNames_t &defaultBranches);
-   RLoopManager(ROOT::RDF::Experimental::RDatasetSpec &&spec);
+   RLoopManager(TTree *tree, const ColumnNames_t &defaultBranches, std::size_t maxBulkSize);
+   RLoopManager(ULong64_t nEmptyEntries, std::size_t maxBulkSize);
+   RLoopManager(std::unique_ptr<RDataSource> ds, const ColumnNames_t &defaultBranches, std::size_t maxBulkSize);
+   RLoopManager(ROOT::RDF::Experimental::RDatasetSpec &&spec, std::size_t maxBulkSize);
    RLoopManager(const RLoopManager &) = delete;
    RLoopManager &operator=(const RLoopManager &) = delete;
 

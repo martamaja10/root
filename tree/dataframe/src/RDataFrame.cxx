@@ -1534,8 +1534,9 @@ using ColumnNamesPtr_t = std::shared_ptr<const ColumnNames_t>;
 /// The default columns are looked at in case no column is specified in the
 /// booking of actions or transformations.
 /// \see ROOT::RDF::RInterface for the documentation of the methods available.
-RDataFrame::RDataFrame(std::string_view treeName, TDirectory *dirPtr, const ColumnNames_t &defaultColumns)
-   : RInterface(std::make_shared<RDFDetail::RLoopManager>(nullptr, defaultColumns))
+RDataFrame::RDataFrame(std::string_view treeName, TDirectory *dirPtr, const ColumnNames_t &defaultColumns,
+                       std::size_t maxBulkSize)
+   : RInterface(std::make_shared<RDFDetail::RLoopManager>(nullptr, defaultColumns, maxBulkSize))
 {
    if (!dirPtr) {
       auto msg = "Invalid TDirectory!";
@@ -1562,8 +1563,9 @@ RDataFrame::RDataFrame(std::string_view treeName, TDirectory *dirPtr, const Colu
 /// The default columns are looked at in case no column is specified in the
 /// booking of actions or transformations.
 /// \see ROOT::RDF::RInterface for the documentation of the methods available.
-RDataFrame::RDataFrame(std::string_view treeName, std::string_view filenameglob, const ColumnNames_t &defaultColumns)
-   : RInterface(std::make_shared<RDFDetail::RLoopManager>(nullptr, defaultColumns))
+RDataFrame::RDataFrame(std::string_view treeName, std::string_view filenameglob, const ColumnNames_t &defaultColumns,
+                       std::size_t maxBulkSize)
+   : RInterface(std::make_shared<RDFDetail::RLoopManager>(nullptr, defaultColumns, maxBulkSize))
 {
    const std::string treeNameInt(treeName);
    const std::string filenameglobInt(filenameglob);
@@ -1584,8 +1586,8 @@ RDataFrame::RDataFrame(std::string_view treeName, std::string_view filenameglob,
 /// The default columns are looked at in case no column is specified in the booking of actions or transformations.
 /// \see ROOT::RDF::RInterface for the documentation of the methods available.
 RDataFrame::RDataFrame(std::string_view treeName, const std::vector<std::string> &fileglobs,
-                       const ColumnNames_t &defaultColumns)
-   : RInterface(std::make_shared<RDFDetail::RLoopManager>(nullptr, defaultColumns))
+                       const ColumnNames_t &defaultColumns, std::size_t maxBulkSize)
+   : RInterface(std::make_shared<RDFDetail::RLoopManager>(nullptr, defaultColumns, maxBulkSize))
 {
    std::string treeNameInt(treeName);
    auto chain = ROOT::Internal::TreeUtils::MakeChainForMT(treeNameInt);
@@ -1602,8 +1604,8 @@ RDataFrame::RDataFrame(std::string_view treeName, const std::vector<std::string>
 /// The default columns are looked at in case no column is specified in the
 /// booking of actions or transformations.
 /// \see ROOT::RDF::RInterface for the documentation of the methods available.
-RDataFrame::RDataFrame(TTree &tree, const ColumnNames_t &defaultColumns)
-   : RInterface(std::make_shared<RDFDetail::RLoopManager>(&tree, defaultColumns))
+RDataFrame::RDataFrame(TTree &tree, const ColumnNames_t &defaultColumns, std::size_t maxBulkSize)
+   : RInterface(std::make_shared<RDFDetail::RLoopManager>(&tree, defaultColumns, maxBulkSize))
 {
 }
 
@@ -1615,8 +1617,8 @@ RDataFrame::RDataFrame(TTree &tree, const ColumnNames_t &defaultColumns)
 /// generate those entries on the fly when some action is triggered,
 /// and it will do so for all the previously-defined columns.
 /// \see ROOT::RDF::RInterface for the documentation of the methods available.
-RDataFrame::RDataFrame(ULong64_t numEntries)
-   : RInterface(std::make_shared<RDFDetail::RLoopManager>(numEntries))
+RDataFrame::RDataFrame(ULong64_t numEntries, std::size_t maxBulkSize)
+   : RInterface(std::make_shared<RDFDetail::RLoopManager>(numEntries, maxBulkSize))
 
 {
 }
@@ -1628,8 +1630,9 @@ RDataFrame::RDataFrame(ULong64_t numEntries)
 ///
 /// A dataframe associated to a data source will query it to access column values.
 /// \see ROOT::RDF::RInterface for the documentation of the methods available.
-RDataFrame::RDataFrame(std::unique_ptr<ROOT::RDF::RDataSource> ds, const ColumnNames_t &defaultColumns)
-   : RInterface(std::make_shared<RDFDetail::RLoopManager>(std::move(ds), defaultColumns))
+RDataFrame::RDataFrame(std::unique_ptr<ROOT::RDF::RDataSource> ds, const ColumnNames_t &defaultColumns,
+                       std::size_t maxBulkSize)
+   : RInterface(std::make_shared<RDFDetail::RLoopManager>(std::move(ds), defaultColumns, maxBulkSize))
 {
 }
 
@@ -1652,8 +1655,8 @@ RDataFrame::RDataFrame(std::unique_ptr<ROOT::RDF::RDataSource> ds, const ColumnN
 /// ~~~
 ///
 /// See also ROOT::RDataFrame::FromSpec().
-RDataFrame::RDataFrame(ROOT::RDF::Experimental::RDatasetSpec spec)
-   : RInterface(std::make_shared<RDFDetail::RLoopManager>(std::move(spec)))
+RDataFrame::RDataFrame(ROOT::RDF::Experimental::RDatasetSpec spec, std::size_t maxBulkSize)
+   : RInterface(std::make_shared<RDFDetail::RLoopManager>(std::move(spec), maxBulkSize))
 {
 }
 
