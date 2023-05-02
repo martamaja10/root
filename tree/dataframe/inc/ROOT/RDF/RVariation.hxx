@@ -53,33 +53,35 @@ bool ResultsSizeEq(const T &results, std::size_t expected, std::size_t nColumns,
 }
 
 template <typename T>
-std::size_t GetNVariations(const RVec<T> &results)
+std::size_t GetNVariations(const RVec<RVec<T>> &results)
 {
    return results.size();
 }
 
 template <typename T>
-void ResizeResults(ROOT::RVec<T> &results, std::size_t /*nCols*/, std::size_t nVariations)
+void ResizeResults(ROOT::RVec<T> &results, std::size_t /*nCols*/, std::size_t nVariations, std::size_t maxBulkSize)
 {
    results.resize(nVariations);
+   for (auto &bulkVec : results)
+      bulkVec.resize(maxBulkSize);
 }
 
 /// Assign into fLastResults[slot] without changing the addresses of its elements (we gave those addresses away in
 /// GetValuePtr)
 /// The callee is responsible of making sure that `resStorage` has the correct size.
 template <typename T>
-void AssignResults(ROOT::RVec<T> &resStorage, ROOT::RVec<T> &&tmpResults)
+void AssignResults(ROOT::RVec<ROOT::RVec<T>> &resStorage, ROOT::RVec<T> &&tmpResults, std::size_t bulkIdx)
 {
    const auto nVariations = resStorage.size(); // we have already checked that tmpResults has the same size
 
    for (auto i = 0u; i < nVariations; ++i)
-      resStorage[i] = std::move(tmpResults[i]);
+      resStorage[i][bulkIdx] = std::move(tmpResults[i]);
 }
 
 template <typename T>
-void *GetValuePtrHelper(ROOT::RVec<T> &v, std::size_t /*colIdx*/, std::size_t varIdx)
+void *GetValuePtrHelper(ROOT::RVec<ROOT::RVec<T>> &v, std::size_t /*colIdx*/, std::size_t varIdx)
 {
-   return static_cast<void *>(&v[varIdx]);
+   return static_cast<void *>(&v[varIdx][0]);
 }
 ///@}
 
@@ -93,35 +95,40 @@ bool ResultsSizeEq(const T &results, std::size_t expected, std::size_t /*nColumn
 }
 
 template <typename T>
-std::size_t GetNVariations(const std::vector<RVec<T>> &results)
+std::size_t GetNVariations(const std::vector<RVec<ROOT::RVec<T>>> &results)
 {
    assert(!results.empty());
    return results[0].size();
 }
 
 template <typename T>
-void ResizeResults(std::vector<ROOT::RVec<T>> &results, std::size_t nCols, std::size_t nVariations)
+void ResizeResults(std::vector<ROOT::RVec<T>> &results, std::size_t nCols, std::size_t nVariations,
+                   std::size_t maxBulkSize)
 {
    results.resize(nCols);
-   for (auto &rvecOverVariations : results)
+   for (auto &rvecOverVariations : results) {
       rvecOverVariations.resize(nVariations);
+      for (auto &rvecOverBulk : rvecOverVariations)
+         rvecOverBulk.resize(maxBulkSize);
+   }
 }
 
 // The callee is responsible of making sure that `resStorage` has the correct outer and inner sizes.
 template <typename T>
-void AssignResults(std::vector<ROOT::RVec<T>> &resStorage, ROOT::RVec<ROOT::RVec<T>> &&tmpResults)
+void AssignResults(std::vector<ROOT::RVec<ROOT::RVec<T>>> &resStorage, ROOT::RVec<ROOT::RVec<T>> &&tmpResults,
+                   std::size_t bulkIdx)
 {
    const auto nCols = resStorage.size();
    const auto nVariations = resStorage[0].size();
    for (auto colIdx = 0u; colIdx < nCols; ++colIdx)
       for (auto varIdx = 0u; varIdx < nVariations; ++varIdx)
-         resStorage[colIdx][varIdx] = std::move(tmpResults[colIdx][varIdx]);
+         resStorage[colIdx][varIdx][bulkIdx] = std::move(tmpResults[colIdx][varIdx]);
 }
 
 template <typename T>
-void *GetValuePtrHelper(std::vector<ROOT::RVec<T>> &v, std::size_t colIdx, std::size_t varIdx)
+void *GetValuePtrHelper(std::vector<ROOT::RVec<ROOT::RVec<T>>> &v, std::size_t colIdx, std::size_t varIdx)
 {
-   return static_cast<void *>(&v[colIdx][varIdx]);
+   return static_cast<void *>(&v[colIdx][varIdx][0]);
 }
 ///@}
 
@@ -150,10 +157,12 @@ class R__CLING_PTRCHECK(off) RVariation final : public RVariationBase {
    using TypeInd_t = std::make_index_sequence<ColumnTypes_t::list_size>;
    using Ret_t = typename CallableTraits<F>::ret_type;
    using VariedCol_t = ColumnType_t<IsSingleColumn, Ret_t>;
-   using Result_t = std::conditional_t<IsSingleColumn, ROOT::RVec<VariedCol_t>, std::vector<ROOT::RVec<VariedCol_t>>>;
+   using Result_t = std::conditional_t<IsSingleColumn, ROOT::RVec<ROOT::RVec<VariedCol_t>>,
+                                       std::vector<ROOT::RVec<ROOT::RVec<VariedCol_t>>>>;
 
    F fExpression;
    /// Per-slot storage for varied column values (for one or multiple columns depending on IsSingleColumn).
+   /// Dimensions from inner to outer: bulk idx, variation idx[, column idx], slot idx.
    std::vector<Result_t> fLastResults;
 
    /// Column readers per slot and per input column
@@ -168,6 +177,7 @@ class R__CLING_PTRCHECK(off) RVariation final : public RVariationBase {
       // fExpression must return an RVec<T>
       auto &&results = fExpression(*(static_cast<ColTypes *>(fValuePtrs[slot][S]) + idx)...);
 
+      /* FIXME this is expensive, can we do something different?
       if (!ResultsSizeEq(results, fVariationNames.size(), fColNames.size(),
                          std::integral_constant<bool, IsSingleColumn>{})) {
          std::string variationName = fVariationNames[0].substr(0, fVariationNames[0].find_first_of(':'));
@@ -175,8 +185,9 @@ class R__CLING_PTRCHECK(off) RVariation final : public RVariationBase {
                                   "\" resulted in " + std::to_string(GetNVariations(results)) + " values, but " +
                                   std::to_string(fVariationNames.size()) + " were expected.");
       }
+      */
 
-      AssignResults(fLastResults[slot * CacheLineStep<Result_t>()], std::move(results));
+      AssignResults(fLastResults[slot * CacheLineStep<Result_t>()], std::move(results), idx);
       (void)idx; // avoid unused parameter warnings (gcc 12.2)
    }
 
@@ -193,7 +204,8 @@ public:
       fLoopManager->Register(this);
 
       for (auto i = 0u; i < lm.GetNSlots(); ++i)
-         ResizeResults(fLastResults[i * CacheLineStep<Result_t>()], colNames.size(), variationTags.size());
+         ResizeResults(fLastResults[i * CacheLineStep<Result_t>()], colNames.size(), variationTags.size(),
+                       fLoopManager->GetMaxEventsPerBulk());
    }
 
    RVariation(const RVariation &) = delete;
