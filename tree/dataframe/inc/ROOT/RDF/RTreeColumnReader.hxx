@@ -92,7 +92,19 @@ class R__CLING_PTRCHECK(off) RTreeColumnReader<RVec<T>> final : public ROOT::Det
    /// Signal whether we ever checked that the branch we are reading with a TTreeReaderArray stores array elements
    /// in contiguous memory.
    EStorageType fStorageType = EStorageType::kUnknown;
+
    RMaskedEntryRange fMask;
+
+   void SetStorageType(std::size_t size)
+   {
+      fStorageType = EStorageType::kContiguous;
+      for (auto i = 0u; i < size - 1; ++i) {
+         if ((char *)&fTreeArray->At(i + 1) - (char *)&fTreeArray->At(i) != sizeof(T)) {
+            fStorageType = EStorageType::kSparse;
+            break;
+         }
+      }
+   }
 
    void *LoadImpl(const Internal::RDF::RMaskedEntryRange &requestedMask, std::size_t bulkSize) final
    {
@@ -101,12 +113,45 @@ class R__CLING_PTRCHECK(off) RTreeColumnReader<RVec<T>> final : public ROOT::Det
          fMask.SetFirstEntry(requestedMask.FirstEntry());
       }
 
-      for (std::size_t i = 0ul; i < bulkSize; ++i) {
+      std::size_t idx = 0u;
+
+      while (fStorageType != EStorageType::kContiguous && idx < bulkSize) {
+         if (requestedMask[idx] && !fMask[idx]) {
+            fTreeReader->SetEntry(requestedMask.FirstEntry() + idx);
+
+            const auto &readerArray = *fTreeArray;
+            const auto size = readerArray.GetSize();
+
+            if (fStorageType == EStorageType::kUnknown && size > 1)
+               SetStorageType(size);
+
+            // do the slow thing: perform many calls to TTreeReaderArray::At
+            // (still faster than using TTreeReader's iterator interface)
+            auto &vec = fCachedValues[idx];
+            vec.resize(size); // TODO reset vector capacity every once in a while to avoid memory hogging
+            for (std::size_t i = 0u; i < size; ++i)
+               vec[i] = fTreeArray->At(i);
+
+            fMask[idx] = true;
+         }
+
+         ++idx;
+      }
+
+      for (std::size_t i = idx; i < bulkSize; ++i) {
          if (requestedMask[i] && !fMask[i]) { // we don't have a value for this entry yet
             fTreeReader->SetEntry(requestedMask.FirstEntry() + i);
 
-            RVec<T> rvec(fTreeArray->begin(), fTreeArray->end());
-            swap(fCachedValues[i], rvec);
+            // Calling GetSize before At is faster than the inverse: because of side-effects it saves one call
+            // to fBranch->GetEntry() on the leaf count (it should not be like that, but it is at the time of writing).
+            const auto size = fTreeArray->GetSize();
+            auto *addr = &fTreeArray->At(0);
+
+            auto &vec = fCachedValues[i];
+            vec.resize(size); // TODO clear array contents every once in a while to avoid memory hogging
+            for (std::size_t j = 0u; j < size; ++j)
+               vec[j] = *(addr + j);
+
             fMask[i] = true;
          }
       }
