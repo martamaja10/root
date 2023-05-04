@@ -159,15 +159,28 @@ private:
    // non-bulk overload, calls EvalExpr in a loop
    template <typename FirstInputCol>
    void UpdateHelper(FirstInputCol *, unsigned int slot, const Internal::RDF::RMaskedEntryRange &requestedMask,
-                     std::size_t bulkSize)
+                     std::size_t bulkSize, std::size_t firstNewIdx)
    {
       auto &results = fLastResults[slot * RDFInternal::CacheLineStep<RetType_t>()];
       auto &valueMask = fMask[slot * RDFInternal::CacheLineStep<RDFInternal::RMaskedEntryRange>()];
       const auto rdfentry_start = fLoopManager->GetUniqueRDFEntry(slot);
-      for (std::size_t i = 0ul; i < bulkSize; ++i) {
-         if (requestedMask[i] && !valueMask[i]) { // we don't have a value for this entry yet
-            results[i] = EvalExpr(slot, i, rdfentry_start + i, ColumnTypes_t{}, TypeInd_t{}, ExtraArgsTag{});
-            valueMask[i] = true;
+      if (firstNewIdx == 0u) {
+         for (std::size_t i = 0u; i < bulkSize; ++i) {
+            if (requestedMask[i]) // we don't have a value for this entry yet
+               results[i] = EvalExpr(slot, i, rdfentry_start + i, ColumnTypes_t{}, TypeInd_t{}, ExtraArgsTag{});
+         }
+         valueMask = requestedMask;
+      } else {
+         // not a new bulk and requestedMask != valueMask (we checked before)
+         results[firstNewIdx] =
+            EvalExpr(slot, firstNewIdx, rdfentry_start + firstNewIdx, ColumnTypes_t{}, TypeInd_t{}, ExtraArgsTag{});
+         ++firstNewIdx;
+
+         for (std::size_t i = firstNewIdx; i < bulkSize; ++i) {
+            if (requestedMask[i] && !valueMask[i]) { // we don't have a value for this entry yet
+               results[i] = EvalExpr(slot, i, rdfentry_start + i, ColumnTypes_t{}, TypeInd_t{}, ExtraArgsTag{});
+               valueMask[i] = true;
+            }
          }
       }
    }
@@ -184,7 +197,8 @@ private:
 
    // bulk overload (first input column is a REventMask)
    void UpdateHelper(ROOT::RDF::Experimental::REventMask *, unsigned int slot,
-                     const Internal::RDF::RMaskedEntryRange &requestedMask, std::size_t bulkSize)
+                     const Internal::RDF::RMaskedEntryRange &requestedMask, std::size_t bulkSize,
+                     std::size_t /*firstNewIdx*/)
    {
       const auto eventMask = ROOT::RDF::Experimental::REventMask(requestedMask, bulkSize);
       EvalBulkExpr(eventMask, slot, ColumnTypes_t{}, TypeInd_t{});
@@ -228,10 +242,18 @@ public:
    void Update(unsigned int slot, const Internal::RDF::RMaskedEntryRange &requestedMask, std::size_t bulkSize) final
    {
       auto &valueMask = fMask[slot * RDFInternal::CacheLineStep<RDFInternal::RMaskedEntryRange>()];
+      // Index of the first entry in the bulk for which we do not already have a value
+      std::size_t firstNewIdx = std::numeric_limits<std::size_t>::max();
       if (valueMask.FirstEntry() != requestedMask.FirstEntry()) { // new bulk
          // if it turns out that we do these two operations together very often, maybe it's worth having a ad-hoc method
          valueMask.SetAll(false);
          valueMask.SetFirstEntry(requestedMask.FirstEntry());
+         firstNewIdx = 0u;
+      } else if ((firstNewIdx = valueMask.Contains(requestedMask, bulkSize)) ==
+                 std::numeric_limits<std::size_t>::max()) {
+         // this is a common occurrence: it happens when the same Define is used multiple times downstream of the same
+         // Filters -- nothing to do.
+         return;
       }
 
       std::transform(fValueReaders[slot].begin(), fValueReaders[slot].end(), fValuePtrs[slot].begin(),
@@ -239,7 +261,7 @@ public:
 
       // dispatch either to the bulk version or to the event-by-event version based on the type of the first input col
       using FirstArg_t = TakeFirstParameter_t<FunParamTypes_t>;
-      UpdateHelper((FirstArg_t *)nullptr, slot, requestedMask, bulkSize);
+      UpdateHelper((FirstArg_t *)nullptr, slot, requestedMask, bulkSize, firstNewIdx);
    }
 
    void Update(unsigned int /*slot*/, const ROOT::RDF::RSampleInfo & /*id*/) final {}

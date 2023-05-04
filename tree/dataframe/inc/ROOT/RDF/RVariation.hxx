@@ -237,16 +237,23 @@ public:
    void Update(unsigned int slot, const RMaskedEntryRange &requestedMask, std::size_t bulkSize) final
    {
       auto &valueMask = fMask[slot * RDFInternal::CacheLineStep<RDFInternal::RMaskedEntryRange>()];
+      // Index of the first entry in the bulk for which we do not already have a value
+      std::size_t firstNewIdx = std::numeric_limits<std::size_t>::max();
       if (valueMask.FirstEntry() != requestedMask.FirstEntry()) { // new bulk
          // if it turns out that we do these two operations together very often, maybe it's worth having a ad-hoc method
          valueMask.SetAll(false);
          valueMask.SetFirstEntry(requestedMask.FirstEntry());
+         firstNewIdx = 0u;
+      } else if ((firstNewIdx = valueMask.Contains(requestedMask, bulkSize)) == std::numeric_limits<std::size_t>::max()) {
+         // this is a common occurrence: it happens when the same Vary result is used multiple times downstream of the
+         // same Filters -- nothing to do.
+         return;
       }
 
       std::transform(fValueReaders[slot].begin(), fValueReaders[slot].end(), fValuePtrs[slot].begin(),
                      [&requestedMask, &bulkSize](auto *v) { return v->Load(requestedMask, bulkSize); });
 
-      for (std::size_t i = 0ul; i < bulkSize; ++i) {
+      for (std::size_t i = firstNewIdx; i < bulkSize; ++i) {
          if (requestedMask[i] && !valueMask[i]) { // we don't have a value for this entry yet
             UpdateHelper(slot, i, ColumnTypes_t{}, TypeInd_t{});
             valueMask[i] = true;

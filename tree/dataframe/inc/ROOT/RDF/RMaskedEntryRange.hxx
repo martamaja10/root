@@ -40,6 +40,18 @@ public:
          fMask[i] |= other[i];
    }
    std::size_t Count(std::size_t until) const { return std::accumulate(fMask.begin(), fMask.begin() + until, 0ul); }
+
+   // Return std::numeric_limits<std::size_t>::max() if this mask is a superset of other.
+   // Otherwise return the index of the first entry in other that is not contained in this mask.
+   // Does _not_ check whether this->fBegin is equal to other.fBegin.
+   std::size_t Contains(const RMaskedEntryRange &other, std::size_t until)
+   {
+      for (std::size_t i = 0u; i < until; ++i)
+         if (other.fMask[i] && !fMask[i])
+            return i;
+
+      return std::numeric_limits<std::size_t>::max();
+   }
 };
 
 } // namespace RDF
