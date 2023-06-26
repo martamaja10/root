@@ -15,6 +15,8 @@
 #include "ROOT/RDF/GraphNode.hxx"
 #include "ROOT/RDF/RActionBase.hxx"
 #include "ROOT/RDF/RColumnReaderBase.hxx"
+#include "ROOT/RDF/REventMask.hxx"
+#include "ROOT/RDF/RMaskedEntryRange.hxx"
 #include "ROOT/RDF/Utils.hxx" // ColumnNames_t, IsInternalColumn
 #include "ROOT/RDF/RLoopManager.hxx"
 #include "ROOT/RDF/RVariedAction.hxx"
@@ -23,6 +25,7 @@
 #include <cstddef> // std::size_t
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace ROOT {
@@ -52,6 +55,7 @@ std::shared_ptr<GraphNode> AddDefinesToGraph(std::shared_ptr<GraphNode> node, co
 template <typename Helper, typename PrevNode, typename ColumnTypes_t = typename Helper::ColumnTypes_t>
 class R__CLING_PTRCHECK(off) RAction : public RActionBase {
    using TypeInd_t = std::make_index_sequence<ColumnTypes_t::list_size>;
+   static constexpr bool kUseBulkAPI = IsBulkHelper<Helper>;
 
    Helper fHelper;
    const std::shared_ptr<PrevNode> fPrevNodePtr;
@@ -103,10 +107,16 @@ public:
    }
 
    template <typename... ColTypes, std::size_t... S>
-   void CallExec(unsigned int slot, std::size_t idx, TypeList<ColTypes...>, std::index_sequence<S...>)
+   void CallExec(unsigned int slot, const RMaskedEntryRange &mask, std::size_t bulkSize, TypeList<ColTypes...>, std::index_sequence<S...>)
    {
-      fHelper.Exec(slot, *(static_cast<ColTypes *>(fValuePtrs[slot][S]) + idx)...);
-      (void)idx; // avoid unused parameter warning (gcc 12.1)
+      if constexpr (kUseBulkAPI) {
+         const auto eventMask = ROOT::RDF::Experimental::REventMask(mask, bulkSize);
+         fHelper.Exec(eventMask, ROOT::RVec<ColTypes>(static_cast<ColTypes *>(fValuePtrs[slot][S]), bulkSize)...);
+      } else {
+         for (std::size_t i = 0ul; i < bulkSize; ++i)
+            if (mask[i])
+               fHelper.Exec(slot, *(static_cast<ColTypes *>(fValuePtrs[slot][S]) + i)...);
+      }
    }
 
    void Run(unsigned int slot, Long64_t entry, std::size_t bulkSize) final
@@ -116,10 +126,7 @@ public:
       std::transform(fValueReaders[slot].begin(), fValueReaders[slot].end(), fValuePtrs[slot].begin(),
                      [&mask, &bulkSize](auto *v) { return v->Load(mask, bulkSize); });
 
-      for (std::size_t i = 0ul; i < bulkSize; ++i) {
-         if (mask[i])
-            CallExec(slot, i, ColumnTypes_t{}, TypeInd_t{});
-      }
+      CallExec(slot, mask, bulkSize, ColumnTypes_t{}, TypeInd_t{});
    }
 
    void TriggerChildrenCount() final { fPrevNode.IncrChildrenCount(); }

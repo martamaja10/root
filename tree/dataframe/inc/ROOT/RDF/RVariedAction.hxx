@@ -17,6 +17,8 @@
 #include "RColumnReaderBase.hxx"
 #include "RLoopManager.hxx"
 #include "RJittedFilter.hxx"
+#include "ROOT/RDF/REventMask.hxx"
+#include "RMaskedEntryRange.hxx"
 #include "ROOT/RDF/RMergeableValue.hxx"
 #include "ROOT/RDF/RSampleInfo.hxx"
 
@@ -42,6 +44,7 @@ class R__CLING_PTRCHECK(off) RVariedAction final : public RActionBase {
    // If the PrevNode is a RJittedFilter, our collection of previous nodes will have to use the RNodeBase type:
    // we'll have a RJittedFilter for the nominal case, but the others will be concrete filters.
    using PrevNodeType = std::conditional_t<std::is_same<PrevNode, RJittedFilter>::value, RFilterBase, PrevNode>;
+   static constexpr bool kUseBulkAPI = IsBulkHelper<Helper>;
 
    std::vector<Helper> fHelpers; ///< Action helpers per variation.
    /// Owning pointers to upstream nodes for each systematic variation.
@@ -147,10 +150,16 @@ public:
 
    template <typename... ColTypes, std::size_t... S>
    void
-   CallExec(unsigned int slot, unsigned int varIdx, std::size_t idx, TypeList<ColTypes...>, std::index_sequence<S...>)
+   CallExec(unsigned int slot, unsigned int varIdx, const RMaskedEntryRange & mask, std::size_t bulkSize, TypeList<ColTypes...>, std::index_sequence<S...>)
    {
-      fHelpers[varIdx].Exec(slot, *(static_cast<ColTypes *>(fValuePtrs[slot][varIdx][S]) + idx)...);
-      (void)idx;
+      if constexpr (kUseBulkAPI) {
+         const auto eventMask = ROOT::RDF::Experimental::REventMask(mask, bulkSize);
+         fHelpers[varIdx].Exec(eventMask, ROOT::RVec<ColTypes>(static_cast<ColTypes *>(fValuePtrs[slot][varIdx][S]), bulkSize)...);
+      } else {
+         for (std::size_t i = 0ul; i < bulkSize; ++i)
+            if (mask[i])
+               fHelpers[varIdx].Exec(slot, *(static_cast<ColTypes *>(fValuePtrs[slot][varIdx][S]) + i)...);
+      }
    }
 
    void Run(unsigned int slot, Long64_t entry, std::size_t bulkSize) final
@@ -162,10 +171,7 @@ public:
                         fValuePtrs[slot][varIdx].begin(),
                         [&mask, &bulkSize](auto *v) { return v->Load(mask, bulkSize); });
 
-         for (std::size_t i = 0ul; i < bulkSize; ++i) {
-            if (mask[i])
-               CallExec(slot, varIdx, i, ColumnTypes_t{}, TypeInd_t{});
-         }
+         CallExec(slot, varIdx, mask, bulkSize, ColumnTypes_t{}, TypeInd_t{});
       }
    }
 

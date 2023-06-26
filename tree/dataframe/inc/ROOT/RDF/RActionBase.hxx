@@ -37,6 +37,12 @@ class GraphNode;
 
 using namespace ROOT::Detail::RDF;
 
+template <typename Helper, typename IsBulkFlag = void>
+constexpr bool IsBulkHelper = false;
+
+template <typename Helper>
+constexpr bool IsBulkHelper<Helper, std::void_t<decltype(Helper::kUseBulk)>> = Helper::kUseBulk;
+
 class RActionBase {
 protected:
    /// A raw pointer to the RLoopManager at the root of this functional graph.
