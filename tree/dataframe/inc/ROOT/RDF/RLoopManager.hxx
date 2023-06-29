@@ -255,7 +255,10 @@ public:
    void AddSampleCallback(void *nodePtr, ROOT::RDF::SampleCallback_t &&callback);
 
    void SetEmptyEntryRange(std::pair<ULong64_t, ULong64_t> &&newRange);
+
    void ChangeSpec(ROOT::RDF::Experimental::RDatasetSpec &&spec);
+
+   std::pair<bool, std::string> SupportsTreeBulkIO(const std::string &colName);
 };
 
 } // ns RDF

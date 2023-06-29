@@ -24,6 +24,7 @@
 #include "RVariationBase.hxx"
 #include "RVariationReader.hxx"
 #include "ROOT/RVec.hxx"
+#include "Utils.hxx" // SupportsBulkIO
 
 #include <ROOT/RDataSource.hxx>
 #include <ROOT/TypeTraits.hxx>
@@ -145,21 +146,6 @@ RDFDetail::RColumnReaderBase *MakeBulkColumnReader(unsigned int slot, RLoopManag
 
    return lm.AddTreeColumnReader(slot, colName, std::move(bulkReader), typeid(T));
 }
-
-// Compile-time check for bulk I/O support: must be able to call `frombuf` on column type
-// Default case: no bulk I/O support
-template <typename ColType, typename Check = void>
-constexpr bool SupportsBulkIO = false;
-
-// Scalar column types with `frombuf` support
-template <typename ColType>
-constexpr bool SupportsBulkIO<ColType, std::void_t<decltype(frombuf(*((char **)nullptr), (ColType *)nullptr))>> = true;
-
-// Collections (RVec columns) whose value_type has `frombuf` support
-template <typename ElementType>
-constexpr bool
-   SupportsBulkIO<ROOT::RVec<ElementType>, std::void_t<decltype(frombuf(*((char **)nullptr), (ElementType *)nullptr))>> =
-      true;
 
 // never returns a nullptr
 template <typename T>

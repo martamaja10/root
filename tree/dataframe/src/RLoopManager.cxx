@@ -1205,3 +1205,31 @@ void RLoopManager::SetEmptyEntryRange(std::pair<ULong64_t, ULong64_t> &&newRange
 {
    fEmptyEntryRange = std::move(newRange);
 }
+
+/// See ROOT::RDF::RInterfaceBase::SupportsTreeBulkIO().
+/// Expects colName _not_ to be an alias.
+std::pair<bool, std::string> RLoopManager::SupportsTreeBulkIO(const std::string &colName)
+{
+   if (fTree == nullptr)
+      return {false, "There is no input tree or chain (maybe reading data via a data source?)."};
+
+   if (!RDFInternal::IsStrInVec(colName, GetBranchNames()))
+      return {false, "This is a valid column name but it does not refer to a TTree column."};
+
+   auto *b = fTree->GetBranch(colName.c_str());
+   if (!b) // try harder, with FindBranch
+      b = fTree->FindBranch(colName.c_str());
+   // we just checked that colName is a valid branch name so we expect it to be there
+   assert(b != nullptr);
+
+   // these next few lines must be in sync with RDFInternal::GetBranchForBulkIO
+   if (!b->SupportsBulkRead())
+      return {false, "TBranch::SupportsBulkRead() returned false."};
+
+   TLeaf *l = static_cast<TLeaf *>(b->GetListOfLeaves()->UncheckedAt(0));
+   TLeaf *lc = l->GetLeafCount();
+   if (lc && l->GetLenStatic() > 1)
+      return {false, "TTree bulk I/O supports 2D arrays (1 static and one dynamic dimension) but RDF does not"};
+
+   return {true, ""};
+}

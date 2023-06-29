@@ -7,6 +7,25 @@
 
 using ROOT::RDF::Experimental::REventMask;
 
+TEST(RDFBulkAPI, SupportsTreeBulkIO)
+{
+   TTree t("t", "t");
+   int x = 0;
+   float arr[2]{}; // RDF thinks that static-size arrays of size 1 are scalars
+   t.Branch("x", &x);
+   t.Branch("arr", &arr, "arr[2]/F");
+   t.Fill();
+
+   auto df = ROOT::RDataFrame(t).Alias("z", "x");
+
+   EXPECT_TRUE(df.SupportsTreeBulkIO<int>("x").first);
+   EXPECT_TRUE(df.SupportsTreeBulkIO<int>("z").first);
+   EXPECT_TRUE(df.SupportsTreeBulkIO<ROOT::RVec<float>>("arr").first);
+
+   EXPECT_THROW(df.SupportsTreeBulkIO<double>("arr"), std::runtime_error);
+   EXPECT_THROW(df.SupportsTreeBulkIO<double>("x"), std::runtime_error);
+}
+
 // the type of a column defined via the bulk API must be inferred from
 // the second argument to the callable rather than from its return type
 TEST(RDFBulkAPI, DefinedColumnType)

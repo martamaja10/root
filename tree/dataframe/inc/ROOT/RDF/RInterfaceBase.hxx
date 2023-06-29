@@ -11,6 +11,7 @@
 #ifndef ROOT_RDF_RINTERFACEBASE
 #define ROOT_RDF_RINTERFACEBASE
 
+#include "ROOT/RDF/Utils.hxx" // IsStrInVec, SupportsBulkIO
 #include "ROOT/RVec.hxx"
 #include <ROOT/RDF/InterfaceUtils.hxx>
 #include <ROOT/RDF/RColumnRegister.hxx>
@@ -202,6 +203,33 @@ public:
    ColumnNames_t GetColumnNames();
 
    std::string GetColumnType(std::string_view column);
+
+   /////////////////////////////////////////////////////////////////////////////
+   /// \brief Check whether a given column will be read using TTree bulk I/O.
+   /// \return A tuple with a boolean (true if TTree bulk I/O will be used)
+   /// and a string (if the boolean is false, the string contains a human-readable
+   /// explanation as to why).
+   ///
+   /// This is not an action nor a transformation, just a query to the RDataFrame object.
+   template <typename ColType>
+   std::pair<bool, std::string> SupportsTreeBulkIO(const std::string &colName)
+   {
+      if (!RDFInternal::IsStrInVec(colName, GetColumnNames()))
+         return {false, "Not a known column."};
+
+      if (!RDFInternal::SupportsBulkIO<ColType>)
+         return {false, "TTree bulk I/O not supported for this type."};
+
+      // using a pointer to silence some GCC warnings about binding a reference to a temporary
+      // (false positives, AFAICT, since type_infos have static lifetime)
+      const auto *actualTypeID = &RDFInternal::TypeName2TypeID(GetColumnType(colName));
+      const auto &expectedTypeID = typeid(ColType);
+      if (*actualTypeID != expectedTypeID)
+         throw std::runtime_error("SupportsTreeBulkIO: Column has type " + GetColumnType(colName) + ", not " +
+                                  RDFInternal::TypeID2TypeName(expectedTypeID) + ".");
+
+      return fLoopManager->SupportsTreeBulkIO(fColRegister.ResolveAlias(colName));
+   }
 
    RDFDescription Describe();
 
