@@ -17,7 +17,6 @@
 #include <ROOT/RDF/RDefineBase.hxx>
 #include <ROOT/TypeTraits.hxx>
 
-#include <deque>
 #include <vector>
 
 namespace ROOT {
@@ -30,18 +29,17 @@ template <typename F>
 class R__CLING_PTRCHECK(off) RDefinePerSample final : public RDefineBase {
    using RetType_t = typename CallableTraits<F>::ret_type;
 
-   // Avoid instantiating vector<bool> as `operator[]` returns temporaries in that case. Use std::deque instead.
-   using ValuesPerSlot_t =
-      std::conditional_t<std::is_same<RetType_t, bool>::value, std::deque<RetType_t>, std::vector<RetType_t>>;
-
    F fExpression;
-   ValuesPerSlot_t fLastResults;
+   std::vector<ROOT::RVec<RetType_t>> fLastResults;
 
 public:
    RDefinePerSample(std::string_view name, std::string_view type, F expression, RLoopManager &lm)
       : RDefineBase(name, type, RDFInternal::RColumnRegister{nullptr}, lm, /*columnNames*/ {}),
         fExpression(std::move(expression)), fLastResults(lm.GetNSlots() * RDFInternal::CacheLineStep<RetType_t>())
    {
+      for (auto &r : fLastResults)
+         r.resize(fLoopManager->GetMaxEventsPerBulk());
+
       fLoopManager->Register(this);
       auto callUpdate = [this](unsigned int slot, const ROOT::RDF::RSampleInfo &id) { this->Update(slot, id); };
       fLoopManager->AddSampleCallback(this, std::move(callUpdate));
@@ -55,7 +53,7 @@ public:
    /// Return the (type-erased) address of the Define'd value for the given processing slot.
    void *GetValuePtr(unsigned int slot) final
    {
-      return static_cast<void *>(&fLastResults[slot * RDFInternal::CacheLineStep<RetType_t>()]);
+      return static_cast<void *>(fLastResults[slot * RDFInternal::CacheLineStep<RetType_t>()].data());
    }
 
    void Update(unsigned int, const RDFInternal::RMaskedEntryRange &, std::size_t) final
@@ -63,10 +61,15 @@ public:
       // no-op
    }
 
-   /// Update the value at the address returned by GetValuePtr with the content corresponding to the given entry
+   /// Update the values of the array starting at GetValuePtr().
+   /// Even if all values will be equal we still fill an array of maxBulkSize values
+   /// for consistency with the reading of other columns.
    void Update(unsigned int slot, const ROOT::RDF::RSampleInfo &id) final
    {
-      fLastResults[slot * RDFInternal::CacheLineStep<RetType_t>()] = fExpression(slot, id);
+      const auto value = fExpression(slot, id);
+      auto &results = fLastResults[slot * RDFInternal::CacheLineStep<RetType_t>()];
+      for (std::size_t i = 0u; i < results.size(); ++i)
+         results[i] = value;
    }
 
    const std::type_info &GetTypeId() const final { return typeid(RetType_t); }

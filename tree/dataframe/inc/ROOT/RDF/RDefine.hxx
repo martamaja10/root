@@ -111,11 +111,8 @@ public:
                                         typename CallableTraits<F>::ret_type>;
 
 private:
-   // Avoid instantiating vector<bool> as `operator[]` returns temporaries in that case. Use std::deque instead.
-   using ValuesPerSlot_t = std::vector<ROOT::RVec<RetType_t>>;
-
    F fExpression;
-   ValuesPerSlot_t fLastResults;
+   std::vector<ROOT::RVec<RetType_t>> fLastResults;
 
    /// Column readers per slot and per input column
    std::vector<std::array<RColumnReaderBase *, ColumnTypes_t::list_size>> fValueReaders;
