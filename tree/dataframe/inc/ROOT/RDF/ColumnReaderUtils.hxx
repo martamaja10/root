@@ -24,6 +24,8 @@
 #include "RVariationBase.hxx"
 #include "RVariationReader.hxx"
 #include "ROOT/RVec.hxx"
+#include "TTree.h"
+#include "TFriendElement.h"
 #include "Utils.hxx" // SupportsBulkIO
 
 #include <ROOT/RDataSource.hxx>
@@ -49,9 +51,12 @@ namespace RDFDetail = ROOT::Detail::RDF;
 // Return a pointer to the requested branch if we can do bulk I/O with it, nullptr otherwise.
 inline TBranch *GetBranchForBulkIO(TTreeReader &r, const std::string &colName)
 {
-   TBranch *b = r.GetTree()->GetBranch(colName.c_str());
+   TTree *t = r.GetTree();
+   assert(t != nullptr);
+
+   TBranch *b = t->GetBranch(colName.c_str());
    if (!b) // try harder, with FindBranch
-      b = r.GetTree()->FindBranch(colName.c_str());
+      b = t->FindBranch(colName.c_str());
    if (!b) {
       const auto msg = "Could not find branch corresponding to column " + colName + ". This should never happen.";
       throw std::runtime_error(std::move(msg));
@@ -61,6 +66,18 @@ inline TBranch *GetBranchForBulkIO(TTreeReader &r, const std::string &colName)
    // variable-sized array and its size is contained in the parent TBranchElement. Much simpler to use TTreeReader.
    if (!b->SupportsBulkRead() || dynamic_cast<TBranchElement *>(b))
       return nullptr;
+
+   // `t` could be a TChain or a TTree, so to be sure to access the tree we need an extra GetTree call
+   if (b->GetTree() != t->GetTree()) { // friend branch
+      // check if the friend tree or chain has an index, in which case we cannot use TTree bulk I/O for the branch
+      // (we'll need to do random access)
+      for (auto *fe: *t->GetListOfFriends()) {
+         auto *friendTree = static_cast<TFriendElement*>(fe)->GetTree(); // friend tree or chain
+         if (friendTree->GetTree() == b->GetTree()) // this is the chain or tree that corresponds to our branch
+            if (friendTree->GetTreeIndex() != nullptr)
+               return nullptr;
+      }
+   }
 
    TLeaf *l = static_cast<TLeaf *>(b->GetListOfLeaves()->UncheckedAt(0));
    TLeaf *lc = l->GetLeafCount();
