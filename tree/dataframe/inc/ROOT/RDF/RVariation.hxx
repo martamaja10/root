@@ -53,7 +53,7 @@ bool ResultsSizeEq(const T &results, std::size_t expected, std::size_t nColumns,
 }
 
 template <typename T>
-std::size_t GetNVariations(const RVec<RVec<T>> &results)
+std::size_t GetNVariations(const RVec<T> &results)
 {
    return results.size();
 }
@@ -95,7 +95,7 @@ bool ResultsSizeEq(const T &results, std::size_t expected, std::size_t /*nColumn
 }
 
 template <typename T>
-std::size_t GetNVariations(const std::vector<RVec<ROOT::RVec<T>>> &results)
+std::size_t GetNVariations(const RVec<RVec<T>> &results)
 {
    assert(!results.empty());
    return results[0].size();
@@ -172,23 +172,36 @@ class R__CLING_PTRCHECK(off) RVariation final : public RVariationBase {
    std::vector<std::array<void *, ColumnTypes_t::list_size>> fValuePtrs;
 
    template <typename... ColTypes, std::size_t... S>
-   void UpdateHelper(unsigned int slot, std::size_t idx, TypeList<ColTypes...>, std::index_sequence<S...>)
+   void UpdateHelper(unsigned int slot, const Internal::RDF::RMaskedEntryRange &requestedMask, std::size_t bulkSize,
+                     std::size_t firstNewIdx, TypeList<ColTypes...>, std::index_sequence<S...>)
    {
-      // fExpression must return an RVec<T>
-      auto &&results = fExpression(*(static_cast<ColTypes *>(fValuePtrs[slot][S]) + idx)...);
+      auto &&results = fExpression(*(static_cast<ColTypes *>(fValuePtrs[slot][S]) + firstNewIdx)...);
 
-      /* FIXME this is expensive, can we do something different?
-      if (!ResultsSizeEq(results, fVariationNames.size(), fColNames.size(),
-                         std::integral_constant<bool, IsSingleColumn>{})) {
+      // for performance reasons we only perform this sanity check on the first evaluation of the bulk
+      // if fExpression returns RVecs of different sizes for different inputs we might incur in UB.
+      const auto nVariations = fVariationNames.size();
+      const auto nCols = fColNames.size();
+      if (!ResultsSizeEq(results, nVariations, nCols, std::bool_constant<IsSingleColumn>{})) {
          std::string variationName = fVariationNames[0].substr(0, fVariationNames[0].find_first_of(':'));
          throw std::runtime_error("The evaluation of the expression for variation \"" + variationName +
                                   "\" resulted in " + std::to_string(GetNVariations(results)) + " values, but " +
-                                  std::to_string(fVariationNames.size()) + " were expected.");
+                                  std::to_string(nVariations) + " were expected.");
       }
-      */
 
-      AssignResults(fLastResults[slot * CacheLineStep<Result_t>()], std::move(results), idx);
-      (void)idx; // avoid unused parameter warnings (gcc 12.2)
+      AssignResults(fLastResults[slot * CacheLineStep<Result_t>()], std::move(results), firstNewIdx);
+
+      // evaluate variations for all other entries in the bulk
+      ++firstNewIdx;
+      auto &valueMask = fMask[slot * RDFInternal::CacheLineStep<RDFInternal::RMaskedEntryRange>()];
+      auto &resultsCache = fLastResults[slot * CacheLineStep<Result_t>()];
+      for (std::size_t i = firstNewIdx; i < bulkSize; ++i) {
+         if (requestedMask[i] && !valueMask[i]) {
+            auto &&res = fExpression(*(static_cast<ColTypes *>(fValuePtrs[slot][S]) + i)...);
+            AssignResults(resultsCache, std::move(res), i);
+         }
+      }
+
+      valueMask = requestedMask;
    }
 
 public:
@@ -237,28 +250,24 @@ public:
    void Update(unsigned int slot, const RMaskedEntryRange &requestedMask, std::size_t bulkSize) final
    {
       auto &valueMask = fMask[slot * RDFInternal::CacheLineStep<RDFInternal::RMaskedEntryRange>()];
-      // Index of the first entry in the bulk for which we do not already have a value
-      std::size_t firstNewIdx = std::numeric_limits<std::size_t>::max();
       if (valueMask.FirstEntry() != requestedMask.FirstEntry()) { // new bulk
          // if it turns out that we do these two operations together very often, maybe it's worth having a ad-hoc method
          valueMask.SetAll(false);
          valueMask.SetFirstEntry(requestedMask.FirstEntry());
-         firstNewIdx = 0u;
-      } else if ((firstNewIdx = valueMask.Contains(requestedMask, bulkSize)) == std::numeric_limits<std::size_t>::max()) {
-         // this is a common occurrence: it happens when the same Vary result is used multiple times downstream of the
-         // same Filters -- nothing to do.
+      }
+
+      // Index of the first entry in the bulk for which we do not already have a value
+      const std::size_t firstNewIdx = valueMask.Contains(requestedMask, bulkSize);
+      if (firstNewIdx == std::numeric_limits<std::size_t>::max()) {
+         // this is a common occurrence: it happens when the same Define is used multiple times downstream of the same
+         // Filters -- nothing to do.
          return;
       }
 
       std::transform(fValueReaders[slot].begin(), fValueReaders[slot].end(), fValuePtrs[slot].begin(),
                      [&requestedMask, &bulkSize](auto *v) { return v->Load(requestedMask, bulkSize); });
 
-      for (std::size_t i = firstNewIdx; i < bulkSize; ++i) {
-         if (requestedMask[i] && !valueMask[i]) { // we don't have a value for this entry yet
-            UpdateHelper(slot, i, ColumnTypes_t{}, TypeInd_t{});
-            valueMask[i] = true;
-         }
-      }
+      UpdateHelper(slot, requestedMask, bulkSize, firstNewIdx, ColumnTypes_t{}, TypeInd_t{});
    }
 
    const std::type_info &GetTypeId() const final { return typeid(VariedCol_t); }

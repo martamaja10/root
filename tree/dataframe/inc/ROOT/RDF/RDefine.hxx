@@ -241,12 +241,12 @@ public:
    {
       auto &valueMask = fMask[slot * RDFInternal::CacheLineStep<RDFInternal::RMaskedEntryRange>()];
       // Index of the first entry in the bulk for which we do not already have a value
-      // If set to max it means "no entries are loaded yet"
-      std::size_t firstNewIdx = std::numeric_limits<std::size_t>::max();
+      std::size_t firstNewIdx;
       if (valueMask.FirstEntry() != requestedMask.FirstEntry()) { // new bulk
          // if it turns out that we do these two operations together very often, maybe it's worth having a ad-hoc method
          valueMask.SetAll(false);
          valueMask.SetFirstEntry(requestedMask.FirstEntry());
+         firstNewIdx = std::numeric_limits<std::size_t>::max(); // we use this to mean "no entries are loaded yet"
       } else if (auto firstNonContainedIndex = valueMask.Contains(requestedMask, bulkSize);
                  firstNonContainedIndex == std::numeric_limits<std::size_t>::max()) {
          // this is a common occurrence: it happens when the same Define is used multiple times downstream of the same
