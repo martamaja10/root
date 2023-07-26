@@ -23,6 +23,7 @@
 
 #include <array>
 #include <deque>
+#include <limits>
 #include <type_traits>
 #include <utility> // std::index_sequence
 #include <vector>
@@ -161,25 +162,25 @@ private:
       auto &results = fLastResults[slot * RDFInternal::CacheLineStep<RetType_t>()];
       auto &valueMask = fMask[slot * RDFInternal::CacheLineStep<RDFInternal::RMaskedEntryRange>()];
       const auto rdfentry_start = fLoopManager->GetUniqueRDFEntry(slot);
-      if (firstNewIdx == 0u) {
+      if (firstNewIdx == std::numeric_limits<std::size_t>::max()) {
          for (std::size_t i = 0u; i < bulkSize; ++i) {
-            if (requestedMask[i]) // we don't have a value for this entry yet
+            if (requestedMask[i])
                results[i] = EvalExpr(slot, i, rdfentry_start + i, ColumnTypes_t{}, TypeInd_t{}, ExtraArgsTag{});
          }
-         valueMask = requestedMask;
-      } else {
-         // not a new bulk and requestedMask != valueMask (we checked before)
+      } else { // not a new bulk and requestedMask isn't contained in valueMask (we checked before)
+         // we know the entry at firstNewIdx has to be calculated
          results[firstNewIdx] =
             EvalExpr(slot, firstNewIdx, rdfentry_start + firstNewIdx, ColumnTypes_t{}, TypeInd_t{}, ExtraArgsTag{});
          ++firstNewIdx;
 
+         // for the others we need to check the event masks masks
          for (std::size_t i = firstNewIdx; i < bulkSize; ++i) {
-            if (requestedMask[i] && !valueMask[i]) { // we don't have a value for this entry yet
+            if (requestedMask[i] && !valueMask[i]) // we don't have a value for this entry yet
                results[i] = EvalExpr(slot, i, rdfentry_start + i, ColumnTypes_t{}, TypeInd_t{}, ExtraArgsTag{});
-               valueMask[i] = true;
-            }
          }
       }
+
+      valueMask.Union(requestedMask);
    }
 
    template <typename... ColTypes, std::size_t... S>
@@ -240,17 +241,19 @@ public:
    {
       auto &valueMask = fMask[slot * RDFInternal::CacheLineStep<RDFInternal::RMaskedEntryRange>()];
       // Index of the first entry in the bulk for which we do not already have a value
+      // If set to max it means "no entries are loaded yet"
       std::size_t firstNewIdx = std::numeric_limits<std::size_t>::max();
       if (valueMask.FirstEntry() != requestedMask.FirstEntry()) { // new bulk
          // if it turns out that we do these two operations together very often, maybe it's worth having a ad-hoc method
          valueMask.SetAll(false);
          valueMask.SetFirstEntry(requestedMask.FirstEntry());
-         firstNewIdx = 0u;
-      } else if ((firstNewIdx = valueMask.Contains(requestedMask, bulkSize)) ==
-                 std::numeric_limits<std::size_t>::max()) {
+      } else if (auto firstNonContainedIndex = valueMask.Contains(requestedMask, bulkSize);
+                 firstNonContainedIndex == std::numeric_limits<std::size_t>::max()) {
          // this is a common occurrence: it happens when the same Define is used multiple times downstream of the same
          // Filters -- nothing to do.
          return;
+      } else {
+         firstNewIdx = firstNonContainedIndex;
       }
 
       std::transform(fValueReaders[slot].begin(), fValueReaders[slot].end(), fValuePtrs[slot].begin(),
