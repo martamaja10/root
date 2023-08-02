@@ -108,21 +108,30 @@ public:
          // assert we either have not loaded a bulk yet or we exhausted the last branch bulk
          assert(fBranchBulkSize == 0u || fBranchBulkBegin + fBranchBulkSize == fLoadedEntriesBegin + nLoadedEntries);
 
+         // It can happen that because of a TEntryList or a RDatasetSpec we start reading from the middle of a basket (i.e. not
+         // from the beginning of a new cluster). If that's the case we need to adjust things so we read from the start of the basket:
+         // GetEntriesSerialized does not allow reading a bulk starting from the middle of a basket.
+         const Long64_t localEntry = fLoadedEntriesBegin + nLoadedEntries - fChainOffset;
+         const Long64_t basketStartIdx =
+            TMath::BinarySearch(fBranch->GetWriteBasket() + 1, fBranch->GetBasketEntry(), localEntry);
+         const Long64_t basketStart = fBranch->GetBasketEntry()[basketStartIdx];
+         const std::size_t nEntriesToSkip = localEntry - basketStart;
+
          // read in new branch bulk
-         fBranchBulkBegin = fLoadedEntriesBegin + nLoadedEntries;
-         fBranchBulkElementsOffset = 0u;
          // GetEntriesSerialized does not byte-swap, so later we use frombuf to byte-swap and copy in a single pass
-         const auto ret = fBranch->GetBulkRead().GetEntriesSerialized(fBranchBulkBegin - fChainOffset, fBuf);
+         const auto ret = fBranch->GetBulkRead().GetEntriesSerialized(basketStart, fBuf);
          if (ret == -1)
             throw std::runtime_error(
                "RBulkScalarReader: could not load branch values. This should never happen. File name: " +
                std::string(fBranch->GetTree()->GetCurrentFile()->GetName()) +
                ". File title: " + std::string(fBranch->GetTree()->GetCurrentFile()->GetTitle()) +
                ". Branch name: " + std::string(fBranch->GetFullName()) +
-               ". Requested entry at beginning of bulk: " + std::to_string(fBranchBulkBegin));
-         fBranchBulkSize = ret;
+               ". Requested entry at beginning of bulk: " + std::to_string(basketStart));
 
-         const auto nToLoad = std::min(fBranchBulkSize, bulkSize - nLoadedEntries);
+         fBranchBulkSize = ret;
+         fBranchBulkBegin = basketStart + fChainOffset;
+         fBranchBulkElementsOffset = std::accumulate(sizes + nLoadedEntries, sizes + nLoadedEntries + nEntriesToSkip, std::size_t(0u));
+         const auto nToLoad = std::min(fBranchBulkSize - nEntriesToSkip, bulkSize - nLoadedEntries);
          elementsOffset += LoadN(nToLoad, /*arrayOffset*/ nLoadedEntries, elementsOffset, sizes);
          nLoadedEntries += nToLoad;
       }

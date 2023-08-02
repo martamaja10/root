@@ -74,19 +74,30 @@ public:
       while (nLoaded < bulkSize) {
          // assert we either have not loaded a bulk yet or we exhausted the last branch bulk
          assert(fBranchBulkSize == 0u || fBranchBulkBegin + fBranchBulkSize == fLoadedEntriesBegin + nLoaded);
-         fBranchBulkBegin = fLoadedEntriesBegin + nLoaded;
+
+         // It can happen that because of a TEntryList or a RDatasetSpec we start reading from the middle of a basket (i.e. not
+         // from the beginning of a new cluster). If that's the case we need to adjust things so we read from the start of the basket:
+         // GetEntriesSerialized does not allow reading a bulk starting from the middle of a basket.
+         const Long64_t localEntry = fLoadedEntriesBegin + nLoaded - fChainOffset;
+         const Long64_t basketStartIdx =
+            TMath::BinarySearch(fBranch->GetWriteBasket() + 1, fBranch->GetBasketEntry(), localEntry);
+         const Long64_t basketStart = fBranch->GetBasketEntry()[basketStartIdx];
+         const std::size_t nToSkip = localEntry - basketStart;
+
          // GetEntriesSerialized does not byte-swap, so later we use frombuf to byte-swap and copy in a single pass
-         const auto ret = fBranch->GetBulkRead().GetEntriesSerialized(fBranchBulkBegin - fChainOffset, fBuf);
+         const auto ret = fBranch->GetBulkRead().GetEntriesSerialized(basketStart, fBuf);
          if (ret == -1)
             throw std::runtime_error(
                "RBulkStaticArrayReader: could not load branch values. This should never happen. File name: " +
                std::string(fBranch->GetTree()->GetCurrentFile()->GetName()) +
                ". File title: " + std::string(fBranch->GetTree()->GetCurrentFile()->GetTitle()) +
                ". Branch name: " + std::string(fBranch->GetFullName()) +
-               ". Requested entry at beginning of bulk: " + std::to_string(fBranchBulkBegin));
+               ". Requested entry at beginning of bulk: " + std::to_string(basketStart));
+
          fBranchBulkSize = ret;
-         const auto nToLoad = std::min(fBranchBulkSize, bulkSize - nLoaded);
-         LoadN(nToLoad, /*arrayOffset*/ nLoaded, /*branchBulkOffset*/ 0u);
+         fBranchBulkBegin = basketStart + fChainOffset;
+         const auto nToLoad = std::min(fBranchBulkSize - nToSkip, bulkSize - nLoaded);
+         LoadN(nToLoad, /*arrayOffset*/ nLoaded, /*branchBulkOffset*/ nToSkip);
          nLoaded += nToLoad;
       }
 
