@@ -52,6 +52,8 @@ public:
 
       return std::numeric_limits<std::size_t>::max();
    }
+
+   const ROOT::RVecB &GetMask() const { return fMask; }
 };
 
 } // namespace RDF

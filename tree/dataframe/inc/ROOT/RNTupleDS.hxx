@@ -44,6 +44,12 @@ class RNTupleColumnReader;
 }
 
 class RNTupleDS final : public ROOT::RDF::RDataSource {
+   struct RActiveClusterInfo {
+      ROOT::Experimental::NTupleSize_t fFirstEntry = 0;
+      ROOT::Experimental::ClusterSize_t fClusterSize{0};
+      ROOT::Experimental::DescriptorId_t fClusterID{ROOT::Experimental::kInvalidDescriptorId};
+   };
+
    /// Clones of the first source, one for each slot
    std::vector<std::unique_ptr<ROOT::Experimental::Detail::RPageSource>> fSources;
 
@@ -54,6 +60,7 @@ class RNTupleDS final : public ROOT::RDF::RDataSource {
    std::vector<std::string> fColumnNames;
    std::vector<std::string> fColumnTypes;
    std::vector<size_t> fActiveColumns;
+   std::vector<RActiveClusterInfo> fActiveClusterInfos;
 
    unsigned fNSlots = 0;
    bool fHasSeenAllRanges = false;
@@ -88,6 +95,8 @@ public:
 
    std::unique_ptr<ROOT::Detail::RDF::RColumnReaderBase>
    GetColumnReaders(unsigned int /*slot*/, std::string_view /*name*/, const std::type_info &) final;
+   RActiveClusterInfo GetActiveClusterInfo(unsigned int slot) const;
+   std::size_t GetBulkSize(unsigned int slot, ULong64_t rangeStart, std::size_t maxSize) final;
 
 protected:
    Record_t GetColumnReadersImpl(std::string_view name, const std::type_info &) final;

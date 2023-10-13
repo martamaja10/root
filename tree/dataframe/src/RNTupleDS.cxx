@@ -115,20 +115,21 @@ class RNTupleColumnReader : public ROOT::Detail::RDF::RColumnReaderBase {
    using RPageSource = ROOT::Experimental::Detail::RPageSource;
 
    std::unique_ptr<RFieldBase> fField; ///< The field backing the RDF column
-   RFieldBase::RValue fValue;          ///< The memory location used to read from fField
-   Long64_t fLastEntry;                ///< Last entry number that was read
+   RFieldBase::RBulk fBulk;            ///< The RNTuple bulk reader
+   RNTupleDS *fDS;                     ///< The data source. Never null, always valid
+   unsigned int fSlot;                 ///< What processing slot this reader is used for
 
 public:
-   RNTupleColumnReader(std::unique_ptr<RFieldBase> f)
-      : fField(std::move(f)), fValue(fField->GenerateValue()), fLastEntry(-1)
+   RNTupleColumnReader(std::unique_ptr<RFieldBase> f, RNTupleDS &ds, unsigned int slot)
+      : fField(std::move(f)), fBulk(fField->GenerateBulk()), fDS(&ds), fSlot(slot)
    {
    }
    ~RNTupleColumnReader() = default;
 
    /// Column readers are created as prototype and then cloned for every slot
-   std::unique_ptr<RNTupleColumnReader> Clone()
+   std::unique_ptr<RNTupleColumnReader> Clone(unsigned int slot)
    {
-      return std::make_unique<RNTupleColumnReader>(fField->Clone(fField->GetName()));
+      return std::make_unique<RNTupleColumnReader>(fField->Clone(fField->GetName()), *fDS, slot);
    }
 
    /// Connect the field and its subfields to the page source
@@ -139,16 +140,13 @@ public:
          f.ConnectPageSource(source);
    }
 
-   void *LoadImpl(const ROOT::Internal::RDF::RMaskedEntryRange &mask, std::size_t /*bulkSize*/) final
+   void *LoadImpl(const ROOT::Internal::RDF::RMaskedEntryRange &mask, std::size_t bulkSize) final
    {
-      // TODO remove assumption that bulk has size 1
       const auto firstEntry = mask.FirstEntry();
-      if (firstEntry != fLastEntry && mask[0]) {
-         fValue.Read(firstEntry);
-         fLastEntry = firstEntry;
-      }
-
-      return fValue.GetRawPtr();
+      const bool *boolmask = mask.GetMask().data();
+      const auto &clusterInfo = fDS->GetActiveClusterInfo(fSlot);
+      ROOT::Experimental::RClusterIndex idx(clusterInfo.fClusterID, firstEntry - clusterInfo.fFirstEntry);
+      return fBulk.ReadBulk(idx, boolmask, bulkSize);
    }
 };
 
@@ -205,8 +203,8 @@ void RNTupleDS::AddField(const RNTupleDescriptor &desc, std::string_view colName
          cardinalityField->SetOnDiskId(fieldId);
          fColumnNames.emplace_back("R_rdf_sizeof_" + std::string(colName));
          fColumnTypes.emplace_back(cardinalityField->GetType());
-         auto cardColReader = std::make_unique<ROOT::Experimental::Internal::RNTupleColumnReader>(
-            std::move(cardinalityField));
+         auto cardColReader =
+            std::make_unique<ROOT::Experimental::Internal::RNTupleColumnReader>(std::move(cardinalityField), *this, 0);
          fColumnReaderPrototypes.emplace_back(std::move(cardColReader));
 
          for (const auto &f : desc.GetFieldIterable(fieldDesc.GetId())) {
@@ -258,15 +256,16 @@ void RNTupleDS::AddField(const RNTupleDescriptor &desc, std::string_view colName
    if (cardinalityField) {
       fColumnNames.emplace_back("R_rdf_sizeof_" + std::string(colName));
       fColumnTypes.emplace_back(cardinalityField->GetType());
-      auto cardColReader = std::make_unique<ROOT::Experimental::Internal::RNTupleColumnReader>(
-         std::move(cardinalityField));
+      auto cardColReader =
+         std::make_unique<ROOT::Experimental::Internal::RNTupleColumnReader>(std::move(cardinalityField), *this, 0);
       fColumnReaderPrototypes.emplace_back(std::move(cardColReader));
    }
 
    skeinIDs.emplace_back(fieldId);
    fColumnNames.emplace_back(colName);
    fColumnTypes.emplace_back(valueField->GetType());
-   auto valColReader = std::make_unique<ROOT::Experimental::Internal::RNTupleColumnReader>(std::move(valueField));
+   auto valColReader =
+      std::make_unique<ROOT::Experimental::Internal::RNTupleColumnReader>(std::move(valueField), *this, 0);
    fColumnReaderPrototypes.emplace_back(std::move(valColReader));
 }
 
@@ -275,6 +274,7 @@ RNTupleDS::RNTupleDS(std::unique_ptr<Detail::RPageSource> pageSource)
    pageSource->Attach();
    auto descriptorGuard = pageSource->GetSharedDescriptorGuard();
    fSources.emplace_back(std::move(pageSource));
+   fActiveClusterInfos.emplace_back();
 
    AddField(descriptorGuard.GetRef(), "", descriptorGuard->GetFieldZeroId(), std::vector<DescriptorId_t>());
 }
@@ -291,7 +291,7 @@ RNTupleDS::GetColumnReaders(unsigned int slot, std::string_view name, const std:
    // at this point we can assume that `name` will be found in fColumnNames, RDF is in charge validation
    // TODO(jblomer): check incoming type
    const auto index = std::distance(fColumnNames.begin(), std::find(fColumnNames.begin(), fColumnNames.end(), name));
-   auto clone = fColumnReaderPrototypes[index]->Clone();
+   auto clone = fColumnReaderPrototypes[index]->Clone(slot);
    clone->Connect(*fSources[slot]);
    return clone;
 }
@@ -338,6 +338,8 @@ bool RNTupleDS::HasColumn(std::string_view colName) const
 void RNTupleDS::Initialize()
 {
    fHasSeenAllRanges = false;
+   for (unsigned int i = 0; i < fNSlots; ++i)
+      fActiveClusterInfos[i] = RActiveClusterInfo{};
 }
 
 void RNTupleDS::Finalize() {}
@@ -352,7 +354,41 @@ void RNTupleDS::SetNSlots(unsigned int nSlots)
       fSources.emplace_back(fSources[0]->Clone());
       assert(i == (fSources.size() - 1));
       fSources[i]->Attach();
+      fActiveClusterInfos.emplace_back();
    }
+}
+RNTupleDS::RActiveClusterInfo RNTupleDS::GetActiveClusterInfo(unsigned int slot) const
+{
+   return fActiveClusterInfos[slot];
+}
+
+std::size_t RNTupleDS::GetBulkSize(unsigned int slot, ULong64_t rangeStart, std::size_t maxSize)
+{
+   auto &clusterInfo = fActiveClusterInfos[slot];
+   auto nextClusterBoundary = clusterInfo.fFirstEntry + clusterInfo.fClusterSize;
+
+   if (rangeStart < nextClusterBoundary) {
+      auto remainingEntries = nextClusterBoundary - rangeStart;
+      return maxSize < remainingEntries ? maxSize : remainingEntries;
+   }
+
+   auto descGuard = fSources[slot]->GetSharedDescriptorGuard();
+   for (const auto &c : descGuard->GetClusterIterable()) {
+      // TODO: consider cluster sharding
+      if (c.GetFirstEntryIndex() > rangeStart)
+         continue;
+      if ((c.GetFirstEntryIndex() + c.GetNEntries()) <= rangeStart)
+         continue;
+
+      clusterInfo.fFirstEntry = c.GetFirstEntryIndex();
+      clusterInfo.fClusterSize = c.GetNEntries();
+      clusterInfo.fClusterID = c.GetId();
+      nextClusterBoundary = clusterInfo.fFirstEntry + clusterInfo.fClusterSize;
+      auto remainingEntries = nextClusterBoundary - rangeStart;
+      return maxSize < remainingEntries ? maxSize : remainingEntries;
+   }
+   // Never here?
+   return 1;
 }
 } // namespace Experimental
 } // namespace ROOT
