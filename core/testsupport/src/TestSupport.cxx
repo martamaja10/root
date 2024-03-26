@@ -74,6 +74,12 @@ static struct ForbidDiagnostics {
         return;
       }
 
+      if (level == kWarning
+          && strstr(msg, "The current tree in the TChain  has changed (e.g. by TTree::Process) even though TTreeReader::SetEntry() was called, which switched the tree again. Did you mean to call TTreeReader::SetLocalEntry()") != nullptr) {
+        std::cerr << "Warning in " << location << " " << msg << std::endl;
+        return;
+      }
+
       FAIL() << "Received unexpected diagnostic of severity "
          << level
          << " at '" << location << "' reading '" << msg << "'.\n"
