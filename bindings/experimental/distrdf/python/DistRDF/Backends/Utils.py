@@ -86,7 +86,18 @@ def declare_shared_libraries(libraries_to_include: Iterable[str]) -> None:
             if not os.path.exists(shared_library):
                 raise IOError("Shared library does not exist!")
             raise Exception("ROOT couldn't load the shared library!")
+        
+def declare_code(code_to_declare: str) -> None: 
+    code_to_declare_with_guards = "#ifndef CODE\n#define CODE\n{}\n#endif".format(code_to_declare)
+    ROOT.gInterpreter.Declare(code_to_declare_with_guards)
 
+def macro_compile(paths_to_macros_to_compile: str) -> None: 
+    # This method compiles and loads a shared library containing the code from the file "filename".
+    
+    for path_to_macro_to_compile in paths_to_macros_to_compile:
+        ROOT.gSystem.CompileMacro(path_to_macro_to_compile, "kO")
+    
+    # process line and with c++ with the interpreter lock    
 
 def get_paths_set_from_string(path_string: str) -> Set[str]:
     """

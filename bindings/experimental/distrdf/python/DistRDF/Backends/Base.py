@@ -28,7 +28,8 @@ if TYPE_CHECKING:
     from DistRDF.Ranges import DataRange
 
 
-def setup_mapper(initialization_fn: Callable) -> None:
+#def setup_mapper(initialization_fn: Callable, declaration_fn: Callable) -> None:
+def setup_mapper(initialization_fn: Callable) -> None:    
     """
     Perform initial setup steps common to every mapper function.
     """
@@ -45,6 +46,8 @@ def setup_mapper(initialization_fn: Callable) -> None:
     # Run initialization method to prepare the worker runtime
     # environment
     initialization_fn()
+    
+    #declaration_fn()
 
 
 def get_mergeable_values(starting_node: ROOT.RDF.RNode, range_id: int,
@@ -171,14 +174,43 @@ class BaseBackend(ABC):
         shared_libraries (list): List of shared libraries needed for the
             analysis.
     """
+    #def __init__(self, local_header=None, local_lib=None, local_macro=None):    
+    
+    def __init__(self):
+        self.local_header = set()
+        self.local_lib = set()
+        self.local_macro = set()
 
+        
     initialization = staticmethod(lambda: None)
 
     headers = set()
     shared_libraries = set()
+    macros = set()
 
+    # @classmethod
+    # def register_initialization(cls, fun, *args, **kwargs):
+    #     """
+    #     Convert the initialization function and its arguments into a callable
+    #     without arguments. This callable is saved on the backend parent class.
+    #     Therefore, changes on the runtime backend do not require users to set
+    #     the initialization function again.
+
+    #     Args:
+    #         fun (function): Function to be executed.
+
+    #         *args (list): Variable length argument list used to execute the
+    #             function.
+
+    #         **kwargs (dict): Keyword arguments used to execute the function.
+    #     """
+    #     cls.initialization = partial(fun, *args, **kwargs)
+    
+    
+    #def register_initialization(cls, funcs, *args, **kwargs, df = None, RunOncePerProc = True):
     @classmethod
     def register_initialization(cls, fun, *args, **kwargs):
+    
         """
         Convert the initialization function and its arguments into a callable
         without arguments. This callable is saved on the backend parent class.
@@ -193,8 +225,54 @@ class BaseBackend(ABC):
 
             **kwargs (dict): Keyword arguments used to execute the function.
         """
-        cls.initialization = partial(fun, *args, **kwargs)
+        cls.initialization = partial(fun, *args, **kwargs)    
 
+        # for func in funcs:
+        #     cls.initialization = partial(func, *args, **kwargs)    
+        
+    #declaration = staticmethod(lambda: None) --> instead use a string attribute 
+    
+    #def register_declaration(cls, code, df = None_to_declare): 
+    #@classmethod
+    def register_declaration(cls, code_to_declare): 
+        # string attribute that is being filled in 
+        # add header guards 
+        Utils.declare_code(code_to_declare)
+        # if more declares are added, we append them here 
+       # cls.declaration = ROOT.gInterpreter.Declare(code_to_declare, df = None)  
+    
+    #compilemacro = staticmethod(lambda: None)  
+    #@classmethod
+    def compile_macro(self, paths_to_macros_to_compile):
+        
+        #macros_to_compile = set() 
+        
+        Utils.macro_compile(paths_to_macros_to_compile)
+        # what if there is more than one compile macro 
+        #macros_to_compile.Update()
+    
+    #@classmethod
+    def distribute_files(self, files_paths):
+        """
+        Sends to the workers the generic files needed by the user.
+
+        Args:
+            files_paths (str, iter): Paths to the files to be sent to the
+                distributed workers.
+        """
+        files_to_distribute = set()
+
+        if isinstance(files_paths, str):
+            files_to_distribute.update(
+                Utils.get_paths_set_from_string(files_paths))
+        else:
+            for path_string in files_paths:
+                files_to_distribute.update(
+                    Utils.get_paths_set_from_string(path_string))
+
+        self.distribute_unique_paths(files_to_distribute)
+    
+        
     @abstractmethod
     def ProcessAndMerge(self, ranges: List[DataRange],
                         mapper: Callable[..., TaskResult],
@@ -221,27 +299,7 @@ class BaseBackend(ABC):
         """
         pass
 
-    def distribute_files(self, files_paths):
-        """
-        Sends to the workers the generic files needed by the user.
-
-        Args:
-            files_paths (str, iter): Paths to the files to be sent to the
-                distributed workers.
-        """
-        files_to_distribute = set()
-
-        if isinstance(files_paths, str):
-            files_to_distribute.update(
-                Utils.get_paths_set_from_string(files_paths))
-        else:
-            for path_string in files_paths:
-                files_to_distribute.update(
-                    Utils.get_paths_set_from_string(path_string))
-
-        self.distribute_unique_paths(files_to_distribute)
-
-    def distribute_headers(self, headers_paths):
+    def distribute_headers(self, headers_paths, df = None):
         """
         Includes the C++ headers to be declared before execution.
 
@@ -269,7 +327,12 @@ class BaseBackend(ABC):
 
         # Finally, add everything to the includes set
         self.headers.update(headers_to_distribute)
+        
+        
+        # if df is not None: 
+        #     self.local_header.update(headers_to_distribute)
 
+    #@classmethod
     def distribute_shared_libraries(self, shared_libraries_paths):
         """
         Includes the C++ shared libraries to be declared before execution. If
