@@ -47,6 +47,7 @@ def setup_mapper(initialization_fn: Callable) -> None:
     # environment
     initialization_fn()
     
+    # TODO when we implement declaration method - this will need to be added 
     #declaration_fn()
 
 
@@ -186,27 +187,17 @@ class BaseBackend(ABC):
 
     headers = set()
     shared_libraries = set()
+    # this might need to be implemented (it would then need to go through Backend.py of dask/spark,
+    # where the dask_mapper function would need to take an extra argument and it would need to be propagated to ProcessAndMerge function as well). 
+    # for now the problem is that if we use loading of shared libraries via: DistributeSharedLib as we then get an error:
+    # Error in <TCling::LoadPCM>: ROOT PCM /private/var/folders/x8/q7vj26lx5t50ymqnn_64b78h0000gn/T/dask-scratch-space/worker-8r4o1ila/helpers_h_ACLiC_dict_rdict.pcm file does not exist
+    # Info in <TCling::LoadPCM>: In-memory ROOT PCM candidate /Users/martaczurylo/Work/distributed_impr/build/lib/libEG_rdict.pcm
+    pcms = set()
+    
     macros = set()
 
-    # @classmethod
-    # def register_initialization(cls, fun, *args, **kwargs):
-    #     """
-    #     Convert the initialization function and its arguments into a callable
-    #     without arguments. This callable is saved on the backend parent class.
-    #     Therefore, changes on the runtime backend do not require users to set
-    #     the initialization function again.
-
-    #     Args:
-    #         fun (function): Function to be executed.
-
-    #         *args (list): Variable length argument list used to execute the
-    #             function.
-
-    #         **kwargs (dict): Keyword arguments used to execute the function.
-    #     """
-    #     cls.initialization = partial(fun, *args, **kwargs)
     
-    
+    # TODO potentially make sure that if initialization is used, it is only run once per process 
     #def register_initialization(cls, funcs, *args, **kwargs, df = None, RunOncePerProc = True):
     @classmethod
     def register_initialization(cls, fun, *args, **kwargs):
@@ -226,32 +217,31 @@ class BaseBackend(ABC):
             **kwargs (dict): Keyword arguments used to execute the function.
         """
         cls.initialization = partial(fun, *args, **kwargs)    
-
+        # TODO do we want to add an option to initialize more than one function at once? 
         # for func in funcs:
         #     cls.initialization = partial(func, *args, **kwargs)    
-        
-    #declaration = staticmethod(lambda: None) --> instead use a string attribute 
     
+    # TODO
+    #declaration = staticmethod(lambda: None) --> instead use a string attribute 
     #def register_declaration(cls, code, df = None_to_declare): 
-    #@classmethod
     def register_declaration(cls, code_to_declare): 
         # string attribute that is being filled in 
         # add header guards 
         Utils.declare_code(code_to_declare)
         # if more declares are added, we append them here 
-       # cls.declaration = ROOT.gInterpreter.Declare(code_to_declare, df = None)  
+        # cls.declaration = ROOT.gInterpreter.Declare(code_to_declare, df = None)  
     
-    #compilemacro = staticmethod(lambda: None)  
-    #@classmethod
+    # TODO - potentially a new function that wasn't here before
     def compile_macro(self, paths_to_macros_to_compile):
         
         #macros_to_compile = set() 
-        
         Utils.macro_compile(paths_to_macros_to_compile)
         # what if there is more than one compile macro 
         #macros_to_compile.Update()
     
-    #@classmethod
+    # TODO - a number of functions that were here before but were never actually tested
+    # now we moved the interface to the __init__.py - are these functions even needed?
+    # everything else that we need we take from Utils.py 
     def distribute_files(self, files_paths):
         """
         Sends to the workers the generic files needed by the user.
@@ -271,33 +261,6 @@ class BaseBackend(ABC):
                     Utils.get_paths_set_from_string(path_string))
 
         self.distribute_unique_paths(files_to_distribute)
-    
-        
-    @abstractmethod
-    def ProcessAndMerge(self, ranges: List[DataRange],
-                        mapper: Callable[..., TaskResult],
-                        reducer: Callable[[TaskResult, TaskResult], TaskResult]) -> TaskResult:
-        """
-        Subclasses must define how to run map-reduce functions on a given
-        backend.
-        """
-        pass
-
-    @abstractmethod
-    def distribute_unique_paths(self, paths):
-        """
-        Subclasses must define how to send all files needed for the analysis
-        (like headers and libraries) to the workers.
-        """
-        pass
-
-    @abstractmethod
-    def optimize_npartitions(self) -> int:
-        """
-        Return a default number of partitions to split the dataframe in,
-        depending on the backend.
-        """
-        pass
 
     def distribute_headers(self, headers_paths, df = None):
         """
@@ -328,11 +291,10 @@ class BaseBackend(ABC):
         # Finally, add everything to the includes set
         self.headers.update(headers_to_distribute)
         
-        
+        # TODO - probably not needed anymore as we moved the interface to always be local and have the df argument 
         # if df is not None: 
         #     self.local_header.update(headers_to_distribute)
 
-    #@classmethod
     def distribute_shared_libraries(self, shared_libraries_paths):
         """
         Includes the C++ shared libraries to be declared before execution. If
@@ -369,6 +331,34 @@ class BaseBackend(ABC):
 
         # Finally, add everything to the includes set
         self.shared_libraries.update(libraries_to_distribute)
+        
+    # ALL needed abstract methods! 
+    
+    @abstractmethod
+    def ProcessAndMerge(self, ranges: List[DataRange],
+                        mapper: Callable[..., TaskResult],
+                        reducer: Callable[[TaskResult, TaskResult], TaskResult]) -> TaskResult:
+        """
+        Subclasses must define how to run map-reduce functions on a given
+        backend.
+        """
+        pass
+
+    @abstractmethod
+    def distribute_unique_paths(self, paths):
+        """
+        Subclasses must define how to send all files needed for the analysis
+        (like headers and libraries) to the workers.
+        """
+        pass
+
+    @abstractmethod
+    def optimize_npartitions(self) -> int:
+        """
+        Return a default number of partitions to split the dataframe in,
+        depending on the backend.
+        """
+        pass
 
     @abstractmethod
     def make_dataframe(self, *args, **kwargs):

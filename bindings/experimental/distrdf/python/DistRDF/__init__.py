@@ -24,6 +24,8 @@ from DistRDF.LiveVisualize import LiveVisualize
 if TYPE_CHECKING:
     from DistRDF.Proxy import ResultPtrProxy, ResultMapProxy
 
+import ROOT
+
 logger = logging.getLogger(__name__)
 
 
@@ -140,43 +142,25 @@ def create_distributed_module(parentmodule):
     distributed.LiveVisualize = LiveVisualize
 
     distributed.DeclareCppCode = DeclareCppCode
-    distributed.UploadFilesAndLoadSharedLib = UploadFilesAndLoadSharedLib
-    distributed.LoadSharedLib = LoadSharedLib
+    distributed.DistributeHeaders = DistributeHeaders
     distributed.DistributeFiles = DistributeFiles
-    distributed.CompileMacro = CompileMacro
+    #distributed.CompileMacro = CompileMacro
+    distributed.DistributeSharedLib = DistributeSharedLib
+    distributed.DistributeHeadersAndCompileMacro = DistributeHeadersAndCompileMacro
     
     return distributed
 
-
-#def DeclareCppCode(code_to_declare, RunOncePerProcess = True, df = None) -> None:
-def DeclareCppCode(code_to_declare) -> None:
-
-    """
-    Declare the C++ code that has to be processed on each worker. 
-    Args:
-        codeToDeclare (_type_): _description_
-        df (_type_, optional): _description_. Defaults to None.
-    """
-    
-    from DistRDF.Backends import Base
-    #Base.BaseBackend.register_declaration(code_to_declare, df)
-    Base.BaseBackend.register_declaration(code_to_declare)
-
-
-# simplifies 
-# ROOT.gInterpreter.AddIncludePath -- done by distribute_headers
-# ROOT.gSystem.AddDynamicPath  -- done by distribute_shared_libraries
-# ROOT.gSystem.Load -- done by distribute_shared_libraries
-# AS: 
-# distribute_shared_libraries checks for paths to libraries and pcm files 
-# and then calls  Utils.declare_shared_libraries which calls ROOT.gSystem.Load
-def UploadFilesAndLoadSharedLib(paths_to_shared_libraries, necessary_headers, df) -> None:
+# distribute pre-compiled libraries - works 
+# shared libraries are loaded, headers are not loaded, headers are declared? 
+# if headers are not declared (in Backend.py), it still works? - yes 
+def DistributeSharedLib(paths_to_shared_libraries: Iterable[str], df) -> None:
+    # b = Base.BaseBackend()
+    # b.distribute_shared_libraries(paths_to_shared_libraries)
     from DistRDF.Backends import Utils
-    
-    df._headnode.backend.distribute_unique_paths(necessary_headers)
-
     libraries_to_distribute = set()
     pcm_to_distribute = set()
+    #headers_to_distribute = set()
+    
     if isinstance(paths_to_shared_libraries, str):
         pcm_to_distribute, libraries_to_distribute = (
             Utils.check_pcm_in_library_path(paths_to_shared_libraries))
@@ -187,63 +171,75 @@ def UploadFilesAndLoadSharedLib(paths_to_shared_libraries, necessary_headers, df
             )
             libraries_to_distribute.update(libraries)
             pcm_to_distribute.update(pcm)
-    # Distribute shared libraries and pcm files to the workers
-    df._headnode.backend.distribute_unique_paths(libraries_to_distribute)
-    df._headnode.backend.distribute_unique_paths(pcm_to_distribute)
-    # Include shared libraries locally
-    Utils.declare_shared_libraries(libraries_to_distribute) #libraries loading happens here
-    
-    
-    
-    # this won't work because distribute_headers is non-static
-    # from DistRDF.Backends import Base
-    # Base.BaseBackend.distribute_headers(necessary_headers) # or a path to shared fs where all the headers are stored
-    # Base.BaseBackend.distribute_shared_libraries(paths_to_shared_libraries)
 
-def LoadSharedLib(paths_to_shared_libraries) -> None:
+    df._headnode.backend.distribute_unique_paths(pcm_to_distribute)
+    df._headnode.backend.distribute_unique_paths(libraries_to_distribute)
+    
+    # This is where we update the set of shared libraries that can be accessed by the workers
     from DistRDF.Backends import Base
-    # b = Base.BaseBackend()
-    # b.distribute_shared_libraries(paths_to_shared_libraries)
-    Base.BaseBackend.distribute_shared_libraries(paths_to_shared_libraries)
+    Base.BaseBackend.shared_libraries.update(libraries_to_distribute)
+
+# works - headers are distributed correctly 
+# for the AGC case - this is enough to have the helpers.cpp functions working (no need to have the libraries distributed, it can be either of the two)
+def DistributeHeaders(paths_to_headers: Iterable[str], df):
+    from DistRDF.Backends import Utils
+    headers_to_distribute = set()
+    if isinstance(paths_to_headers, str):
+        headers_to_distribute = (Utils.get_paths_set_from_string(paths_to_headers))
+    else: 
+        for path_to_header in paths_to_headers:
+            sanatized_path_to_header = Utils.get_paths_set_from_string(path_to_header)
+            headers_to_distribute.update(sanatized_path_to_header)
         
-# simplifies: d._headnode.backend.distribute_unique_paths([str]) in the user's code
-# for now doesn't work even though now distribute_files is a static method so no need to initialize the class 
-# I can't initialize the class because there are abstract methods
-# 
-def DistributeFiles(paths_to_files, df):
-    df._headnode.backend.distribute_unique_paths(paths_to_files)  #this works
-    
-    # else:
-    #     from DistRDF.Backends import Base
-    #     Base.BaseBackend.distribute_files(paths_to_files)    
-        
-        
-    #from DistRDF.Backends import Base
-    #b = Base.BaseBackend()
-    #b.distribute_files(paths_to_files)
-    #from DistRDF.Backends.Dask import Backend
-    # b = Backend.DaskBackend()
-    
-    #from DistRDF.HeadNode import HeadNode
-    # b = 
-        
-        
-        # backend = HeadNode.backend()
-        # df.backend.distribute_files(paths_to_files)
-            
-            #     headnode = HeadNode.get_headnode(backend, npartitions, treename, filenames)
-            # rdf = DataFrame.RDataFrame(headnode)        
-            
-    # b.distribute_files(paths_to_files)
-    # Base.BaseBackend.distribute_files(paths_to_files)
-   
-# not sure if this is needed not in the context of LoadSharedLib and DistributeFiles?     
-# simplifies ROOT.gInterpreter.AddIncludePath - do we need it? 
-# def IncludeHeader(path_to_headers):
-#     from DistRDF.Backends import Base
-#     Base.BaseBackend.register_declaration(, df = None)
-    
-def CompileMacro(paths_to_macros_to_compile) -> None: 
+    df._headnode.backend.distribute_unique_paths(headers_to_distribute)  #this works
     from DistRDF.Backends import Base
-    Base.BaseBackend.compile_macro(paths_to_macros_to_compile)
+    Base.BaseBackend.headers.update(headers_to_distribute)
+
+# files that are not headers or shared libraries but still might be needed on the nodes  
+def DistributeFiles(paths_to_files: Iterable[str], df):
+    from DistRDF.Backends import Utils
+    files_to_distribute = set()
+    if isinstance(paths_to_files, str):
+        files_to_distribute = (Utils.get_paths_set_from_string(paths_to_files))
+    else: 
+        for path_to_file in paths_to_files:
+            sanatized_path_to_file = Utils.get_paths_set_from_string(path_to_file)
+            files_to_distribute.update(sanatized_path_to_file)
+        
+    df._headnode.backend.distribute_unique_paths(files_to_distribute)  #this works
+    
+# TODO here we need to make sure we actually compile the macro and keep testing it properly    
+def DistributeHeadersAndCompileMacro(paths_to_headers: Iterable[str], df):
+    from DistRDF.Backends import Utils
+    headers_to_distribute = set()
+    if isinstance(paths_to_headers, str):
+        sanatized_path_to_header = (Utils.get_paths_set_from_string(paths_to_headers))
+    else: 
+        for path_to_header in paths_to_headers:
+            sanatized_path_to_header = Utils.get_paths_set_from_string(path_to_header)
+            headers_to_distribute.update(sanatized_path_to_header)
+        
+    df._headnode.backend.distribute_unique_paths(headers_to_distribute)  #this works
+    
+    from DistRDF.Backends import Base
+    Base.BaseBackend.headers.update(headers_to_distribute)
+    
+    Utils.macro_compile(Base.BaseBackend.headers)
+
+# TODO this hasn't been properly implemented yet 
+# follow the way it is done for "initialization", decide whether we make it global 
+# def DeclareCppCode(code_to_declare) -> None:
+# or local (per df):
+def DeclareCppCode(code_to_declare, df) -> None:
+
+    """
+    Declare the C++ code that has to be processed on each worker. 
+    Args:
+        codeToDeclare (_type_): _description_
+        df (_type_, optional): _description_. Defaults to None.
+    """
+    # check if this is the way to proceed or not 
+    # from DistRDF.Backends import Base
+    # #Base.BaseBackend.register_declaration(code_to_declare, df)
+    # Base.BaseBackend.register_declaration(code_to_declare)
     

@@ -139,20 +139,23 @@ class DaskBackend(Base.BaseBackend):
         """
         # Retrieve the current worker local directory
         localdir = get_worker().local_directory
-
-        # Get and declare headers on each worker
+        print(f"localdir from daskmapper {localdir}")
+        
+        #Get and declare headers on each worker
         headers_on_executor = [
             os.path.join(localdir, os.path.basename(filepath))
             for filepath in headers
         ]
-        Utils.declare_headers(headers_on_executor)
-
+        Utils.declare_headers(headers_on_executor) 
+        #print(f"headers_on_executor {headers_on_executor}")
+        
         # Get and declare shared libraries on each worker
         shared_libs_on_ex = [
             os.path.join(localdir, os.path.basename(filepath))
             for filepath in shared_libraries
         ]
         Utils.declare_shared_libraries(shared_libs_on_ex)
+        #print(f"shared_libs_on_ex {shared_libs_on_ex}")
 
         return mapper(current_range)
 
@@ -184,8 +187,11 @@ class DaskBackend(Base.BaseBackend):
         dmapper = dask.delayed(DaskBackend.dask_mapper)
         dreducer = dask.delayed(reducer)
 
-        mergeables_lists = [dmapper(range, self.headers, self.shared_libraries, mapper) for range in ranges]
+        mergeables_lists = [dmapper(range, self.headers, self.shared_libraries, mapper) for range in ranges]        
 
+        print(f"self.headers {self.headers}")
+        print(f"self.shared_libraries {self.shared_libraries}")
+        
         while len(mergeables_lists) > 1:
             mergeables_lists.append(
                 dreducer(mergeables_lists.pop(0), mergeables_lists.pop(0)))
