@@ -87,30 +87,7 @@ def declare_shared_libraries(libraries_to_include: Iterable[str]) -> None:
             if not os.path.exists(shared_library):
                 raise IOError("Shared library does not exist!")
             raise Exception("ROOT couldn't load the shared library!")
-     
-# TODO    
-def declare_code(code_to_declare: str) -> None: 
-    code_to_declare_with_guards = "#ifndef CODE\n#define CODE\n{}\n#endif".format(code_to_declare)
-    ROOT.gInterpreter.Declare(code_to_declare_with_guards)
 
-# TODO
-def macro_compile(paths_to_macros_to_compile: str) -> None: 
-    # This method compiles and loads a shared library containing the code from the file "filename".
-    
-    # TODO "we need to be able to connect to a worker and load the path to compile there "
-    # this won't work of course - but just to remember what is not working 
-    # we need to go via Backend.py and the mapper there to have access to the workers
-    # look at how we implemented LoadSharedLib and LoadHeaders - we now just need to make sure the headers can be compiled
-        
-    # lc = LocalCluster(n_workers=2, threads_per_worker=1, processes=True)
-    # Client(lc)
-    # localdir = get_worker().local_directory # dask specific 
-    
-    # for path_to_macro_to_compile in paths_to_macros_to_compile:
-    # compile_proper_path = os.Path(localdir) / paths_to_macros_to_compile
-    ROOT.gSystem.CompileMacro(compile_proper_path, "kO")
-    
-    # process line and with c++ with the interpreter lock    
 
 def get_paths_set_from_string(path_string: str) -> Set[str]:
     """

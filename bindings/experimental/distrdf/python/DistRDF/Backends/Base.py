@@ -27,9 +27,7 @@ if TYPE_CHECKING:
     from DistRDF.HeadNode import TaskObjects
     from DistRDF.Ranges import DataRange
 
-
-#def setup_mapper(initialization_fn: Callable, declaration_fn: Callable) -> None:
-def setup_mapper(initialization_fn: Callable) -> None:    
+def setup_mapper(initialization_fn: Callable, declaration_fn: Callable) -> None:    
     """
     Perform initial setup steps common to every mapper function.
     """
@@ -46,10 +44,7 @@ def setup_mapper(initialization_fn: Callable) -> None:
     # Run initialization method to prepare the worker runtime
     # environment
     initialization_fn()
-    
-    # TODO when we implement declaration method - this will need to be added 
-    #declaration_fn()
-
+    declaration_fn()
 
 def get_mergeable_values(starting_node: ROOT.RDF.RNode, range_id: int,
                          computation_graph_callable: Callable[[ROOT.RDF.RNode, int], List],
@@ -87,14 +82,15 @@ def distrdf_mapper(
         build_rdf_from_range:  Callable[[Union[Ranges.EmptySourceRange, Ranges.TreeRangePerc]],
                                         TaskObjects],
         computation_graph_callable: Callable[[ROOT.RDF.RNode, int], List],
-        initialization_fn: Callable) -> TaskResult:
+        initialization_fn: Callable,
+        declaration_fn: Callable) -> TaskResult:
     """
     Maps the computation graph to the input logical range of entries.
     """
     # Wrap code that may be calling into C++ in a try-except block in order
     # to better propagate exceptions.
     try:
-        setup_mapper(initialization_fn)
+        setup_mapper(initialization_fn, declaration_fn)
 
         # Build an RDataFrame instance for the current mapper task, based
         # on the type of the head node.
@@ -162,6 +158,7 @@ def distrdf_reducer(results_inout: TaskResult,
 
 
 class BaseBackend(ABC):
+    
     """
     Base class for RDataFrame distributed backends.
 
@@ -177,13 +174,15 @@ class BaseBackend(ABC):
     """
     #def __init__(self, local_header=None, local_lib=None, local_macro=None):    
     
-    def __init__(self):
-        self.local_header = set()
-        self.local_lib = set()
-        self.local_macro = set()
+    # def __init__(self):
+    #     self.local_header = set()
+    #     self.local_lib = set()
+    #     self.local_macro = set()
+    #     self.local_pcm = set()
 
         
     initialization = staticmethod(lambda: None)
+    declaration_func = staticmethod(lambda: None)
 
     headers = set()
     shared_libraries = set()
@@ -192,10 +191,8 @@ class BaseBackend(ABC):
     # for now the problem is that if we use loading of shared libraries via: DistributeSharedLib as we then get an error:
     # Error in <TCling::LoadPCM>: ROOT PCM /private/var/folders/x8/q7vj26lx5t50ymqnn_64b78h0000gn/T/dask-scratch-space/worker-8r4o1ila/helpers_h_ACLiC_dict_rdict.pcm file does not exist
     # Info in <TCling::LoadPCM>: In-memory ROOT PCM candidate /Users/martaczurylo/Work/distributed_impr/build/lib/libEG_rdict.pcm
+    # this approach doesn't solve the issue 
     pcms = set()
-    
-    macros = set()
-
     
     # TODO potentially make sure that if initialization is used, it is only run once per process 
     #def register_initialization(cls, funcs, *args, **kwargs, df = None, RunOncePerProc = True):
@@ -217,122 +214,21 @@ class BaseBackend(ABC):
             **kwargs (dict): Keyword arguments used to execute the function.
         """
         cls.initialization = partial(fun, *args, **kwargs)    
+        fun(*args, **kwargs) # reading it as it was before commit: Restrict distributed initialization to executors only #14641
         # TODO do we want to add an option to initialize more than one function at once? 
         # for func in funcs:
         #     cls.initialization = partial(func, *args, **kwargs)    
-    
-    # TODO
-    #declaration = staticmethod(lambda: None) --> instead use a string attribute 
-    #def register_declaration(cls, code, df = None_to_declare): 
-    def register_declaration(cls, code_to_declare): 
-        # string attribute that is being filled in 
-        # add header guards 
-        Utils.declare_code(code_to_declare)
+        
+    @classmethod
+    def register_declaration(cls, declaration): 
+        def mydeclare(declaration): 
+            ROOT.gInterpreter.Declare(declaration)
+            
+        cls.declaration_func = partial(mydeclare, declaration = declaration)
+        mydeclare(declaration) # for the local declaration
+        
         # if more declares are added, we append them here 
         # cls.declaration = ROOT.gInterpreter.Declare(code_to_declare, df = None)  
-    
-    # TODO - potentially a new function that wasn't here before
-    def compile_macro(self, paths_to_macros_to_compile):
-        
-        #macros_to_compile = set() 
-        Utils.macro_compile(paths_to_macros_to_compile)
-        # what if there is more than one compile macro 
-        #macros_to_compile.Update()
-    
-    # TODO - a number of functions that were here before but were never actually tested
-    # now we moved the interface to the __init__.py - are these functions even needed?
-    # everything else that we need we take from Utils.py 
-    def distribute_files(self, files_paths):
-        """
-        Sends to the workers the generic files needed by the user.
-
-        Args:
-            files_paths (str, iter): Paths to the files to be sent to the
-                distributed workers.
-        """
-        files_to_distribute = set()
-
-        if isinstance(files_paths, str):
-            files_to_distribute.update(
-                Utils.get_paths_set_from_string(files_paths))
-        else:
-            for path_string in files_paths:
-                files_to_distribute.update(
-                    Utils.get_paths_set_from_string(path_string))
-
-        self.distribute_unique_paths(files_to_distribute)
-
-    def distribute_headers(self, headers_paths, df = None):
-        """
-        Includes the C++ headers to be declared before execution.
-
-        Args:
-            headers_paths (str, iter): A string or an iterable (such as a
-                list, set...) containing the paths to all necessary C++ headers
-                as strings. This function accepts both paths to the headers
-                themselves and paths to directories containing the headers.
-        """
-        headers_to_distribute = set()
-
-        if isinstance(headers_paths, str):
-            headers_to_distribute.update(
-                Utils.get_paths_set_from_string(headers_paths))
-        else:
-            for path_string in headers_paths:
-                headers_to_distribute.update(
-                    Utils.get_paths_set_from_string(path_string))
-
-        # Distribute header files to the workers
-        self.distribute_unique_paths(headers_to_distribute)
-
-        # Declare headers locally
-        Utils.declare_headers(headers_to_distribute)
-
-        # Finally, add everything to the includes set
-        self.headers.update(headers_to_distribute)
-        
-        # TODO - probably not needed anymore as we moved the interface to always be local and have the df argument 
-        # if df is not None: 
-        #     self.local_header.update(headers_to_distribute)
-
-    def distribute_shared_libraries(self, shared_libraries_paths):
-        """
-        Includes the C++ shared libraries to be declared before execution. If
-        any pcm file is present in the same folder as the shared libraries, the
-        function will try to retrieve them and distribute them.
-
-        Args:
-            shared_libraries_paths (str, iter): A string or an iterable (such as
-                a list, set...) containing the paths to all necessary C++ shared
-                libraries as strings. This function accepts both paths to the
-                libraries themselves and paths to directories containing the
-                libraries.
-        """
-        libraries_to_distribute = set()
-        pcm_to_distribute = set()
-
-        if isinstance(shared_libraries_paths, str):
-            pcm_to_distribute, libraries_to_distribute = (
-                Utils.check_pcm_in_library_path(shared_libraries_paths))
-        else:
-            for path_string in shared_libraries_paths:
-                pcm, libraries = Utils.check_pcm_in_library_path(
-                    path_string
-                )
-                libraries_to_distribute.update(libraries)
-                pcm_to_distribute.update(pcm)
-
-        # Distribute shared libraries and pcm files to the workers
-        self.distribute_unique_paths(libraries_to_distribute)
-        self.distribute_unique_paths(pcm_to_distribute)
-
-        # Include shared libraries locally
-        Utils.declare_shared_libraries(libraries_to_distribute)
-
-        # Finally, add everything to the includes set
-        self.shared_libraries.update(libraries_to_distribute)
-        
-    # ALL needed abstract methods! 
     
     @abstractmethod
     def ProcessAndMerge(self, ranges: List[DataRange],
